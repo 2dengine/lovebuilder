@@ -8,4 +8,4 @@ The builder script must be installed on a 64-bit Apache server running on a Linu
 https://2dengine.com/?p=builder
 
 ## Credits
-SmellyFishsticks, Deceze and others
+SmellyFishstiks, Deceze and others
