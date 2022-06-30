@@ -82,8 +82,8 @@ class Builder {
     file_put_contents($squash.'/love.desktop', $info);
     // icon
     if ($icon) {
-      $iconext = strtolower(pathinfo($icon, PATHINFO_EXTENSION));
-      if ($iconext == 'svg' or $iconext == 'png') {
+      $mime = mime_content_type($icon);
+      if ($mime == 'image/svg+xml' or $mime == 'image/svg' or $mime == 'image/png') {
         $iconcont = file_get_contents($icon);
         unlink($squash.'/love.svg');
         file_put_contents($squash.'/love.'.$iconext, $iconcont);
@@ -123,16 +123,16 @@ class Builder {
     $src->addFromString('love.app/Contents/Info.plist', $info);
     // icon
     if ($icon) {
-      $iconext = strtolower($icon, PATHINFO_EXTENSION);
-      if ($iconext == 'icns') {
-        $iconcont = file_get_contents($icon['tmp_name']);
+      //$iconext = strtolower($icon, PATHINFO_EXTENSION);
+      $mime = mime_content_type($icon);
+      $iconcont = file_get_contents($icon);
+      if ($mime == 'image/x-icns') {
         $src->addFromString('love.app/Contents/Resources/GameIcon.icns', $iconcont);
         $src->addFromString('love.app/Contents/Resources/OS X AppIcon.icns', $iconcont);
-      } elseif ($iconext == 'png') {
-        $iconcont = file_get_contents($icon['tmp_name']);
+      } elseif ($mime == 'image/png') {
         $src->addFromString('love.app/.Icon\r', $iconcont);
       } else {
-        throw new ErrorException('MacOS application icon must be in .ICNS format');
+        throw new ErrorException('MacOS application icon must be in .ICNS or .PNG format');
       }
     }
     // rename
