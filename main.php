@@ -3,6 +3,20 @@
 define('BIN', dirname(__FILE__).'/bin');
 define('CACHE', dirname(__FILE__).'/tmp');
 
+/*
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL); 
+//error handler function
+function customError($errno, $errstr) {
+  echo "<b>Error:</b> [$errno] $errstr";
+}
+//set error handler
+set_error_handler("customError");
+//trigger error
+$file = fopen(CACHE.'/test.txt',"w");
+*/
+
 class Builder {
   public $version;
   public $project;
@@ -25,14 +39,28 @@ class Builder {
       throw new ErrorException('Unsupported Love2D version:'.$ver);
     $this->version = $ver;
   }
+
+  function temp($dir, $prefix) {
+    $real = realpath($dir);
+    if (substr($real, -1) != '/')
+        $real .= '/';
+    $tmp = tempnam($real, $prefix);
+    $name = basename($tmp);
+    if (!is_file($real.$name)) {
+      @unlink($name);
+      throw new ErrorException('Cannot output temp file:'.$real.$name);
+    }
+    return $tmp;
+  }
   
   function exportWindows($icon, $bits = 64) {
     if ($bits != 32 and $bits != 64)
       throw new ErrorException('Invalid platform architecture');
     // copy zipped binaries
     $bins = BIN.'/love-'.$this->version.'-win'.$bits.'.zip';
-    $out = tempnam(CACHE, 'zip');
-    copy($bins, $out);
+    $out = $this->temp(CACHE, 'zip');
+    if (!copy($bins, $out))
+      throw new ErrorException('Cannot output love:'.$out);
     $proj = $this->project;
     $cont = $this->content;
     $src = new ZipArchive;
@@ -40,28 +68,32 @@ class Builder {
     // fuse
     $old = $src->getFromName('love.exe');
     $src->deleteName('love.exe');
+
     // re-compress
     $src->addFromString($proj.'.exe', $old.$cont);
     $src->close();
+    //unlink($fuse);
     return $out;
   }
   
   function exportLinux($icon) {
     // extract zipped app image
-    $bins = BIN.'/love-'.$this->version.'-linux.zip';
+    $bins = realpath(BIN.'/love-'.$this->version.'-linux.zip');
     $squash = CACHE.'/'.uniqid(rand(), true);
     mkdir($squash);
-    /*
+
     $src = new ZipArchive;
-    $src->open($bins);
+    $src->open($bins, ZipArchive::RDONLY);
     $src->extractTo($squash);
     $src->close();
-    */
-    exec("unzip $bins -d $squash");
+
+    //exec("unzip $bins -d $squash");
     // fuse
     $proj = $this->project;
     $cont = $this->content;
     $bin = ($this->version == '11.4') ? $squash.'/bin' : $squash.'/usr/bin';
+    if (!file_exists($bin))
+      throw new ErrorException('Binaries extraction failed:'.$bins);
     $old = file_get_contents($bin.'/love');
     unlink($bin.'/love');
     file_put_contents($bin.'/'.$proj, $old.$cont);
@@ -83,16 +115,19 @@ class Builder {
     // icon
     if ($icon) {
       $mime = mime_content_type($icon);
-      if ($mime == 'image/svg+xml' or $mime == 'image/svg' or $mime == 'image/png') {
-        $iconcont = file_get_contents($icon);
+      $res = file_get_contents($icon);
+      if ($mime == 'image/svg+xml' or $mime == 'image/svg') {
         unlink($squash.'/love.svg');
-        file_put_contents($squash.'/love.'.$iconext, $iconcont);
+        file_put_contents($squash.'/love.svg', $res);
+      } elseif ($mime == 'image/png') {
+        unlink($squash.'/love.svg');
+        file_put_contents($squash.'/love.png', $res);
       } else {
         throw new ErrorException('Linux application icon must be in .PNG or .SVG format');
       }
     }
 
-    $out = tempnam(CACHE, 'img');
+    $out = $this->temp(CACHE, 'img');
     exec(BIN.'/appimagetool-x86_64.AppImage '.$squash.' '.$out);
     exec('rm '.$squash.' -r');
     if (!file_exists($out))
@@ -102,7 +137,7 @@ class Builder {
   }
   
   function exportMacOS($icon) {
-    $out = tempnam(CACHE, 'app');
+    $out = $this->temp(CACHE, 'app');
     $bins = BIN.'/love-'.$this->version.'-macos.zip';
     copy($bins, $out);
     $proj = $this->project;
@@ -125,12 +160,12 @@ class Builder {
     if ($icon) {
       //$iconext = strtolower($icon, PATHINFO_EXTENSION);
       $mime = mime_content_type($icon);
-      $iconcont = file_get_contents($icon);
+      $res = file_get_contents($icon);
       if ($mime == 'image/x-icns') {
-        $src->addFromString('love.app/Contents/Resources/GameIcon.icns', $iconcont);
-        $src->addFromString('love.app/Contents/Resources/OS X AppIcon.icns', $iconcont);
+        $src->addFromString('love.app/Contents/Resources/GameIcon.icns', $res);
+        $src->addFromString('love.app/Contents/Resources/OS X AppIcon.icns', $res);
       } elseif ($mime == 'image/png') {
-        $src->addFromString('love.app/.Icon\r', $iconcont);
+        $src->addFromString('love.app/.Icon\r', $res);
       } else {
         throw new ErrorException('MacOS application icon must be in .ICNS or .PNG format');
       }
@@ -150,7 +185,7 @@ class Builder {
   
   function exportWeb($icon) {
     $bins = BIN.'/love-'.$this->version.'-web.zip';
-    $out = tempnam(CACHE, 'web');
+    $out = $this->temp(CACHE, 'web');
     copy($bins, $out);
     $proj = $this->project;
     $cont = $this->content;
@@ -158,7 +193,7 @@ class Builder {
     $src->open($out);
     $src->addFromString($proj.'.love', $cont);
     $player = $src->getFromName('player.js');
-    $player = str_replace('game.love', $proj.'.love', $player);
+    $player = str_replace('nogame.love', $proj.'.love', $player);
     $src->addFromString('player.js', $player);
     $src->close();
     return $out;
