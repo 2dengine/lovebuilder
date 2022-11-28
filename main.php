@@ -1,6 +1,7 @@
 <?php
 define('BIN', __DIR__.'/bin');
 define('CACHE', __DIR__.'/tmp');
+define('MAX_UPLOAD_SIZE', 80000000);
 
 class Builder {
   protected $version;
@@ -9,13 +10,9 @@ class Builder {
   
   function __construct() {
     if (!is_writable(CACHE))
-      $this->error('Cache directory is not writable');
+      throw new ErrorException('Cache directory is not writable', 500);
   }
-
-  protected function error($msg) {
-    throw new ErrorException($msg);
-  }
-
+/*
   protected function temp($prefix) {
     $real = realpath(CACHE);
     if (substr($real, -1) != '/')
@@ -24,20 +21,21 @@ class Builder {
     $name = basename($tmp);
     if (!is_file($real.$name)) {
       @unlink($name);
-      $this->error('Cannot output temp file:'.$real.$name);
+      throw new ErrorException('Cannot output temp file:'.$real.$name, 500);
     }
     return $tmp;
   }
-  
-  protected function exportWindows($ops) {
+*/
+  protected function exportWindows($out) {
+    $ops = $this->ops;
     $bits = $ops['bits'];
     if ($bits != 32 and $bits != 64)
-      $this->error('Invalid platform architecture');
+      throw new ErrorException('Invalid platform architecture', 400);
 
     // copy zipped binaries
-    $out = $this->temp('zip');
+    //$out = $this->temp('zip');
     if (!copy($this->zip, $out))
-      $this->error('Cannot output love:'.$out);
+      throw new ErrorException('Cannot output love:'.$out, 500);
     $src = new ZipArchive;
     $src->open($out);
 
@@ -55,25 +53,49 @@ class Builder {
     //unlink($fuse);
     return $out;
   }
-  
-  protected function exportLinux($ops) {
-    // extract zipped app image
-    $squash = CACHE.'/'.uniqid(rand(), true);
-    mkdir($squash);
 
+  protected function rrmdir($dir) {
+    // thanks to the PHP manual page
+    if (is_dir($dir)) {
+      $objects = scandir($dir);
+      foreach ($objects as $object) { 
+        if ($object != "." && $object != "..") { 
+          if (is_dir($dir. DIRECTORY_SEPARATOR .$object) && !is_link($dir."/".$object))
+            $this->rrmdir($dir. DIRECTORY_SEPARATOR.$object);
+          else
+            unlink($dir.DIRECTORY_SEPARATOR.$object); 
+        } 
+      }
+      rmdir($dir); 
+    } 
+  }
+  
+  protected function exportLinux($out) {
+    $ops = $this->ops;
+    // extract zipped app image
+    $squash = $out.'.squash/';
+    $this->rrmdir($squash);
+    mkdir($squash);
+/*
     $src = new ZipArchive;
     $src->open($this->zip, ZipArchive::RDONLY);
     $src->extractTo($squash);
     $src->close();
-    //exec("unzip $bins -d $squash");
+    */
+    $bins = $this->zip;
+    exec("unzip $bins -d $squash");
+
+    if (!$ops['https'])
+      unlink($squash.'/https.so');
 
     // fuse
     $ver = $ops['ver'];
     $proj = $ops['project'];
     $cont = $this->content;
     $sqbin = ($ver == '11.4') ? $squash.'/bin' : $squash.'/usr/bin';
-    if (!file_exists($sqbin))
-      $this->error('Binaries extraction failed:'.$sqbin);
+    $sqbin = realpath($sqbin);
+    if (!is_dir($sqbin))
+      throw new ErrorException('Binaries extraction failed', 500);
     $old = file_get_contents($sqbin.'/love');
     unlink($sqbin.'/love');
     file_put_contents($sqbin.'/'.$proj, $old.$cont);
@@ -85,7 +107,7 @@ class Builder {
     exec('chmod +x '.$squash.'/AppRun');
     
     if (!is_executable($sqbin.'/'.$proj))
-      $this->error('Could not make executable');
+      throw new ErrorException('Could not make executable', 500);
     
     // information
     $info = file_get_contents($squash.'/love.desktop');
@@ -104,26 +126,26 @@ class Builder {
         unlink($squash.'/love.svg');
         file_put_contents($squash.'/love.png', $res);
       } else {
-        $this->error('Linux application icon must be in .PNG or .SVG format');
+        throw new ErrorException('Linux application icon must be in .PNG or .SVG format', 400);
       }
     }
 */
-    if (!$ops['https'])
-      $src->deleteName('https.so');
     $appimg = realpath(BIN.'/appimagetool-x86_64.AppImage');
     if (!is_executable($appimg))
-      $this->error('Could not execute AppImageTool');
+      throw new ErrorException('Could not execute AppImageTool', 500);
 
     // build
-    $out = $this->temp('img');
+    //$out = $this->temp('img');
     exec($appimg.' '.$squash.' '.$out);
-    exec('rm '.$squash.' -r');
+    //exec('rm '.$squash.' -r');
+    $this->rrmdir($squash);
 
     return $out;
   }
   
-  protected function exportMacOS($ops) {
-    $out = $this->temp('app');
+  protected function exportMacOS($out) {
+    $ops = $this->ops;
+    //$out = $this->temp('app');
     copy($this->zip, $out);
     $version = $ops['ver'];
     $proj = $ops['project'];
@@ -153,7 +175,7 @@ class Builder {
       } elseif ($mime == 'image/png') {
         $src->addFromString('love.app/.Icon\r', $res);
       } else {
-        $this->error('MacOS application icon must be in .ICNS or .PNG format');
+        throw new ErrorException('MacOS application icon must be in .ICNS or .PNG format', 400);
       }
     }
 */
@@ -176,11 +198,13 @@ class Builder {
     return $out;
   }
   
-  protected function exportWeb($ops) {
-    if ($ops['https'])
-      $this->error('HTTPS is not supported by love.js');
+  protected function exportWeb($out) {
+    $ops = $this->ops;
 
-    $out = $this->temp(CACHE, 'web');
+    if ($ops['https'])
+      throw new ErrorException('HTTPS is not supported by love.js', 400);
+
+    //$out = $this->temp('web');
     copy($this->zip, $out);
     $proj = $ops['project'];
     $cont = $this->content;
@@ -207,48 +231,90 @@ class Builder {
     }
     return min(tobytes('upload_max_filesize'), tobytes('post_max_size'));
   }
+
+  function upload($data) {
+    if (strlen($data) == 0)
+      throw new ErrorException('Love file is required', 400);
+    if (strlen($data) > MAX_UPLOAD_SIZE)
+      throw new ErrorException('Love file is too large', 400);
+
+    $love = CACHE.'/'.crc32($data);
+    if (!is_file($love))
+      file_put_contents($love, $data);
+    $handle = pathinfo($love, PATHINFO_BASENAME);
+    return $handle;
+  }
   
-  function export($love, $platform, $ops) {
-    if ($ops['project'] === null)
-      $ops['project'] = pathinfo($love, PATHINFO_FILENAME);
-    if ($ops['ver'] === null)
-      $ops['ver'] = '11.4';
-    
+  function export($handle, $ops) {
+    $handle = preg_replace('/[^a-zA-Z0-9_\.\-]/', '', $handle);
+    $love = realpath(CACHE.'/'.$handle);
+    if (!$love)
+      throw new ErrorException('Invalid handle', 401);
+
     $zip = new ZipArchive;
     if ($zip->open($love, ZipArchive::RDONLY) !== true)
-      $this->error('Love file is not a zip archive:'.$love);
+      throw new ErrorException('Love file is not a zip archive:'.$love, 400);
     if (!$zip->locateName('main.lua'))
-      $this->error('Cannot locate main.lua:'.$love);
+      throw new ErrorException('Cannot locate main.lua:'.$love, 400);
     $zip->close();
+
+    if (!$ops['project'])
+      throw new ErrorException('Invalid project name', 400);
     
     $ver = $ops['ver'];
     if ($ver != '11.3' and $ver != '11.4')
-      $this->error('Unsupported Love2D version:'.$ver);
+      throw new ErrorException('Unsupported Love2D version:'.$ver, 400);
 
-    $os = $platform;
-    $this->content = file_get_contents($love);
-    $this->zip = BIN.'/love-'.$ver.'-'.$os.'.zip';
-
-    if ($ops['bits'] === null)
+    $os = $ops['platform'];
+    if (!isset($ops['bits']))
       $ops['bits'] = ($os == 'win32') ? 32 : 64;
+    $dest = $love.'.'.crc32(serialize($ops));
 
-    $out = null;
-    if ($os == 'win32' or $os == 'win64') {
-      $out = $this->exportWindows($ops);
-    } elseif ($os == 'linux') {
-      $out = $this->exportLinux($ops);
-    } elseif ($os == 'macos') {
-      $out = $this->exportMacOS($ops);
-    } elseif ($os == 'web') {
-      $out = $this->exportWeb($ops);
-    } else {
-      $this->error('Unsupported target platform');
+    if (!is_file($dest)) {
+      $this->content = file_get_contents($love);
+      //@unlink($love);
+      $this->zip = BIN.'/love-'.$ver.'-'.$os.'.zip';
+      $this->ops = $ops;
+
+      if ($os == 'win32' or $os == 'win64') {
+        $this->exportWindows($dest);
+      } elseif ($os == 'linux') {
+        $this->exportLinux($dest);
+      } elseif ($os == 'macos') {
+        $this->exportMacOS($dest);
+      } elseif ($os == 'web') {
+        $this->exportWeb($dest);
+      } else {
+        throw new ErrorException('Unsupported target platform', 400);
+      }
+
+      if (!$dest or !is_file($dest))
+        throw new ErrorException('Could not build project', 500);
     }
-    return $out;
+    $handle = pathinfo($dest, PATHINFO_BASENAME);
+    //return $this->fetch($handle);
+    return $handle;
+  }
+
+  function fetch($handle, $filename) {
+    $handle = preg_replace('/[^a-zA-Z0-9_\.\-]/', '', $handle);
+    $src = realpath(CACHE.'/'.$handle);
+    if (!is_file($src))
+      throw new ErrorException('The download link has expired', 401);
+
+    $filename = preg_replace('/[^a-zA-Z0-9_\.\-]/', '', $filename);
+
+    header('Content-Description: File Transfer');
+    header('Content-Type: application/octet-stream');
+    header('Content-Disposition: attachment; filename="'.basename($filename).'"');
+    header('Content-Length: '.filesize($src));
+    header('Pragma: public');
+
+    return file_get_contents($src);
   }
   
-  function cleanup($since = 15*60) {
-    // cleanup after 15 minutes
+  function close($since = 15*60) {
+    // cleanup anything older than 15 minutes
     $now = time();
     $dir = new DirectoryIterator(CACHE);
     foreach ($dir as $info) {
