@@ -45,8 +45,8 @@ class Builder {
     $src->deleteName('love.exe');
     $src->addFromString($proj.'.exe', $old.$this->content);
 
-    if (!$ops['https'])
-      $src->deleteName('https.dll');
+    //if (!$ops['https'])
+      //$src->deleteName('https.dll');
 
     // re-compress
     $src->close();
@@ -85,8 +85,8 @@ class Builder {
     $bins = $this->zip;
     exec("unzip $bins -d $squash");
 
-    if (!$ops['https'])
-      unlink($squash.'/https.so');
+    //if (!$ops['https'])
+      //unlink($squash.'/https.so');
 
     // fuse
     $ver = $ops['ver'];
@@ -181,8 +181,8 @@ class Builder {
 */
 
     // include luasec
-    if (!$ops['https'])
-      $src->deleteName('love.app/Contents/Frameworks/https.so');
+    //if (!$ops['https'])
+      //$src->deleteName('love.app/Contents/Frameworks/https.so');
 
     // rename the love.app directory
     // thanks to https://stackoverflow.com/users/476/deceze
@@ -201,8 +201,8 @@ class Builder {
   protected function exportWeb($out) {
     $ops = $this->ops;
 
-    if ($ops['https'])
-      throw new ErrorException('HTTPS is not supported by love.js', 400);
+    //if ($ops['https'])
+      //throw new ErrorException('HTTPS is not supported by love.js', 400);
 
     //$out = $this->temp('web');
     copy($this->zip, $out);
