@@ -1,18 +1,24 @@
 <?php
-// Love2D binaries directory
-define('BIN', __DIR__.'/bin');
-// Temporary upload cache folder
-define('CACHE', __DIR__.'/tmp');
-// Maximum upload size if smaller than what is allowed by the server
-define('MAX_UPLOAD_SIZE', 250000000);
+namespace dengine;
 
-class Builder {
+use ZipArchive;
+use ErrorException;
+use DirectoryIterator;
+
+class Build {
   protected $except;
+  protected $cache;
   protected $bin;
-  protected $src;
-  
+  protected $maxsize;
+
   function __construct($except = true) {
     $this->except = $except;
+    // Temporary uploads folder
+    $this->cache = __DIR__.'/tmp/';
+    // Love2D binaries directory
+    $this->bin = __DIR__.'/bin/';
+    // Maximum upload size if smaller than allowed by the server
+    $this->maxsize = 250000000;
   }
 
   /*
@@ -37,7 +43,7 @@ class Builder {
     foreach ($dir as $info) {
       if ($info->isDot())
         continue;
-      $path = $base.DIRECTORY_SEPARATOR.$info->getFilename();
+      $path = $base.'/'.$info->getFilename();
       if ($info->isDir()) {
         $this->cleanup($path, $since);
         rmdir($path);
@@ -53,8 +59,8 @@ class Builder {
    */
   function open() {
     // check if the cache folder is writable
-    if (!is_writable(CACHE)) {
-      $this->error('Cache directory is not writable', 500);
+    if (!is_writable($this->cache)) {
+      $this->error('The cache directory is missing or may be write-protected', 503);
       return false;
     }
     return true;
@@ -64,7 +70,7 @@ class Builder {
    * Cleans up the cache
    */
   function close() {
-    $this->cleanup(CACHE, 15*60);
+    $this->cleanup($this->cache, 15*60);
   }
 
   /*
@@ -82,7 +88,7 @@ class Builder {
         $v *= $convert[$q];
       return $v;
     }
-    return min(tobytes('upload_max_filesize'), tobytes('post_max_size'), MAX_UPLOAD_SIZE);
+    return min(tobytes('upload_max_filesize'), tobytes('post_max_size'), $this->maxsize);
   }
 
   /*
@@ -91,16 +97,9 @@ class Builder {
    * @param $ops Options array
    */
   protected function exportWindows($out, $ops) {
-    $bits = $ops['bits'];
-    if ($bits != 32 and $bits != 64) {
-      $this->error('Invalid platform architecture', 400);
-      return;
-    }
-
     // copy zipped binaries
-    //$out = $this->temp('zip');
-    if (!copy($this->bin, $out)) {
-      $this->error('Cannot output love:'.$out, 500);
+    if (!copy($ops['bin'], $out)) {
+      $this->error('The project binaries cannot be processed', 503);
       return;
     }
     $src = new ZipArchive;
@@ -108,9 +107,9 @@ class Builder {
 
     // fuse executable
     $old = $src->getFromName('love.exe');
-    $cont = file_get_contents($this->src);
+    $cont = file_get_contents($ops['src']);
 
-    $temp = tempnam(CACHE, 'exe');
+    $temp = tempnam($this->cache, 'exe');
     $file = fopen($temp, 'w');
     fwrite($file, $old);
     fwrite($file, $cont);
@@ -140,21 +139,21 @@ class Builder {
     mkdir($squash);
 /*
     $src = new ZipArchive;
-    $src->open($this->bin, ZipArchive::RDONLY);
+    $src->open($ops['bin'], ZipArchive::RDONLY);
     $src->extractTo($squash);
     $src->close();
     */
-    $bin = $this->bin;
+    $bin = $ops['bin'];
     exec("unzip $bin -d $squash");
 
     // fuse
     $ver = $ops['version'];
     $proj = $ops['project'];
-    $cont = file_get_contents($this->src);
+    $cont = file_get_contents($ops['src']);
     $sqbin = ($ver == '11.4') ? $squash.'/bin' : $squash.'/usr/bin';
     $sqbin = realpath($sqbin);
     if (!is_dir($sqbin)) {
-      $this->error('Binaries extraction failed', 500);
+      $this->error('The project binaries cannot be processed', 503);
       return;
     }
     $old = file_get_contents($sqbin.'/love');
@@ -168,7 +167,7 @@ class Builder {
     exec('chmod +x '.$squash.'/AppRun');
     
     if (!is_executable($sqbin.'/'.$proj)) {
-      $this->error('Could not make executable', 500);
+      $this->error('The project binaries cannot be processed', 503);
       return;
     }
     
@@ -193,9 +192,9 @@ class Builder {
       }
     }
 */
-    $appimg = realpath(BIN.'/appimagetool-x86_64.AppImage');
+    $appimg = realpath($this->bin.'appimagetool-x86_64.AppImage');
     if (!is_executable($appimg)) {
-      $this->error('Could not execute AppImageTool', 500);
+      $this->error('The project binaries cannot be processed', 503);
       return;
     }
 
@@ -213,17 +212,17 @@ class Builder {
    */
   protected function exportMacOS($out, $ops) {
     //$out = $this->temp('app');
-    copy($this->bin, $out);
+    copy($ops['bin'], $out);
 
     $version = $ops['version'];
     $proj = $ops['project'];
-    //$cont = file_get_contents($this->src);
+    //$cont = file_get_contents($ops['src']);
     
     $src = new ZipArchive;
     $src->open($out);
     // love file
     //$src->addFromString('love.app/Contents/Resources/'.$proj.'.love', $cont);
-    $src->addFile($this->src, 'love.app/Contents/Resources/'.$proj.'.love');
+    $src->addFile($ops['src'], 'love.app/Contents/Resources/'.$proj.'.love');
     // information
     $info = $src->getFromName('love.app/Contents/Info.plist');
     $info = preg_replace('/<key>CFBundleName<\/key>[\s]*?<string>[\s\S]*?<\/string>/', "<key>CFBundleName</key>\n\t<string>$proj</string>", $info, 1);
@@ -248,7 +247,7 @@ class Builder {
     }
 */
     // rename the love.app directory
-    // thanks to https://stackoverflow.com/users/476/deceze
+    // thanks to deceze from stackoverflow
     for ($i = 0; $i < $src->numFiles; $i++) { 
       $stat = $src->statIndex($i);
       if (!$stat)
@@ -267,13 +266,13 @@ class Builder {
    */
   protected function exportWeb($out, $ops) {
     //$out = $this->temp('web');
-    copy($this->bin, $out);
+    copy($ops['bin'], $out);
     $proj = $ops['project'];
-    //$cont = file_get_contents($this->src);
+    //$cont = file_get_contents($ops['src']);
     $src = new ZipArchive;
     $src->open($out);
     //$src->addFromString($proj.'.love', $cont);
-    $src->AddFile($this->src, $proj.'.love');
+    $src->AddFile($ops['src'], $proj.'.love');
     $player = $src->getFromName('player.js');
     $player = str_replace('nogame.love', $proj.'.love', $player);
     $src->addFromString('player.js', $player);
@@ -286,94 +285,93 @@ class Builder {
    * @return Uploaded file handle
    */
   function upload($data) {
-    if (strlen($data) == 0) {
-      $this->error('Love file is required', 400);
-      return;
-    }
-    if (strlen($data) > $this->getMaxUploadSize()) {
-      $this->error('Love file is too large', 400);
+    if (strlen($data) == 0 or strlen($data) > $this->getMaxUploadSize()) {
+      $this->error('The uploaded file is invalid or exceeds the maximum allowed size', 400);
       return;
     }
 
-    $love = CACHE.'/'.crc32($data);
-    if (is_file($love))
-      touch($love);
+    $handle = sprintf('%u', crc32($data));
+    $file = $this->cache.$handle;
+    if (is_file($file))
+      touch($file);
     else
-      file_put_contents($love, $data);
-    $handle = pathinfo($love, PATHINFO_BASENAME);
+      file_put_contents($file, $data);
     return $handle;
   }
   
   /*
    * Exports a previously uploaded file based on a handle
    * @param $handle Uploaded file handle
-   * @param $ops Options array
+   * @param $project Project name
+   * @param $platform Target platform
+   * @param $version Love2D version
    * @return Exported file handle
    */
-  function export($handle, $ops) {
+  function export($handle, $project, $platform, $version = '11.4') {
     $handle = preg_replace('/[^a-zA-Z0-9_\.\-]/', '', $handle);
-    $love = realpath(CACHE.'/'.$handle);
+    $project = preg_replace('/[^a-zA-Z0-9_\.\-]/', '', $project);
+    $version = preg_replace('/[^0-9\.]/', '', $version);
+
+    $love = $this->cache.$handle;
     if (!$handle or !$love) {
-      $this->error('Missing or invalid handle', 401);
+      $this->error('The upload handle is invalid or may have expired', 404);
       return;
     }
 
+    if (!$project) {
+      $this->error('The project title is invalid', 400);
+      return;
+    }
     $zip = new ZipArchive;
     if ($zip->open($love, ZipArchive::RDONLY) !== true) {
-      $this->error('File is not a zip archive', 400);
+      $this->error('The project file does not appear to be a valid archive', 400);
       return;
     }
     if ($zip->locateName('main.lua') === false) {
-      $this->error('Cannot locate main.lua:'.$love, 400);
+      $this->error('The project file does not contain main.lua or may be packaged incorrectly', 400);
       return;
     }
     $zip->close();
 
-    if (!$ops['project']) {
-      $this->error('Invalid project name', 400);
+    $bin = $this->bin."love-$version-$platform.zip";
+    if (!is_file($bin)) {
+      $this->error('The specified platform and version are unsupported', 400);
       return;
     }
     
-    $ver = $ops['version'];
-    $os = $ops['platform'];
-    $bin = BIN.'/love-'.$ver.'-'.$os.'.zip';
-
-    if (!is_file($bin)) {
-      $this->error('Unsupported platform or version', 400);
-      return;
-    }
-    if (!isset($ops['bits']))
-      $ops['bits'] = ($os == 'win32') ? 32 : 64;
-
-    $dest = $love.'.'.crc32(serialize($ops));
+    $file = $handle.'-'.sprintf('%u', crc32($bin));
+    $dest = $this->cache.$file;
 
     if (is_file($dest)) {
       touch($dest);
     } else {
-      $this->src = $love; //file_get_contents($love);
-      $this->bin = $bin;
+      $ops = array(
+        'project' => $project,
+        'platform' => $platform,
+        'version' => $version,
+        'src' => $love,
+        'bin' => $bin,
+        'bits'=> ($platform == 'win32') ? 32 : 64,
+      );
 
-      if ($os == 'win32' or $os == 'win64') {
+      if ($platform == 'win32' or $platform == 'win64')
         $this->exportWindows($dest, $ops);
-      } elseif ($os == 'linux') {
+      elseif ($platform == 'linux')
         $this->exportLinux($dest, $ops);
-      } elseif ($os == 'macos') {
+      elseif ($platform == 'macos')
         $this->exportMacOS($dest, $ops);
-      } elseif ($os == 'web') {
+      elseif ($platform == 'web')
         $this->exportWeb($dest, $ops);
-      } else {
-        $this->error('Unsupported target platform', 400);
+      else {
+        $this->error('The specified platform is unsupported', 400);
         return;
       }
-
       if (!is_file($dest)) {
-        $this->error('Could not build project', 500);
+        $this->error('The project could not be exported', 503);
         return;
       }
     }
-    $handle = pathinfo($dest, PATHINFO_BASENAME);
-    //return $this->fetch($handle);
-    return $handle;
+    return $file;
   }
 
   /*
@@ -384,9 +382,10 @@ class Builder {
    */
   function fetch($handle, $filename = 'download.zip') {
     $handle = preg_replace('/[^a-zA-Z0-9_\.\-]/', '', $handle);
-    $src = realpath(CACHE.'/'.$handle);
+
+    $src = $this->cache.$handle;
     if (!$handle or !is_file($src)) {
-      $this->error('The download link has expired', 401);
+      $this->error('The download handle is invalid or may have expired', 404);
       return;
     }
 
@@ -397,7 +396,8 @@ class Builder {
     header('Content-Disposition: attachment; filename="'.basename($filename).'"');
     header('Content-Length: '.filesize($src));
     header('Pragma: public');
+    http_response_code(200);
 
-    return file_get_contents($src);
+    echo file_get_contents($src);
   }
 }
