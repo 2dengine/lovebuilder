@@ -19,6 +19,9 @@ class Build {
     $this->bin = __DIR__.'/bin/';
     // Maximum upload size if smaller than allowed by the server
     $this->maxsize = 250000000;
+
+    if (!is_writable($this->cache))
+      $this->error('The cache directory is missing or may be write-protected', 503);
   }
 
   /*
@@ -51,26 +54,6 @@ class Build {
         unlink($path);
       }
     }
-  }
-
-  /*
-   * Prepares the object for I/O operations
-   * @return True if successful
-   */
-  function open() {
-    // check if the cache folder is writable
-    if (!is_writable($this->cache)) {
-      $this->error('The cache directory is missing or may be write-protected', 503);
-      return false;
-    }
-    return true;
-  }
-
-  /*
-   * Cleans up the cache
-   */
-  function close() {
-    $this->cleanup($this->cache, 15*60);
   }
 
   /*
@@ -127,6 +110,20 @@ class Build {
     unlink($temp);
   }
   
+  private function removeDirectory($path) {
+    $dir = new DirectoryIterator($path);
+    foreach ($dir as $info) {
+      if ($info->isDot())
+        continue;
+      $full = $info->getPathname();
+      if ($info->isDir())
+        if ($this->removeDirectory($full))
+          @rmdir($full);
+      if ($info->isFile())
+        @unlink($full);
+    }
+  }
+  
   /*
    * Exports the love project to Linux as an AppImage
    * @param $out Destination path
@@ -135,7 +132,8 @@ class Build {
   protected function exportLinux($out, $ops) {
     // extract zipped app image
     $squash = $out.'.squash/';
-    $this->removeDirectory($squash);
+    if (is_dir($squash))
+      $this->removeDirectory($squash);
     mkdir($squash);
 /*
     $src = new ZipArchive;
@@ -371,6 +369,9 @@ class Build {
         return;
       }
     }
+    
+    $this->cleanup($this->cache, 15*60);
+    
     return $file;
   }
 
