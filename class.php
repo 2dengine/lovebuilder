@@ -34,26 +34,20 @@ class Build {
       throw new ErrorException($message, $code);
   }
 
-  /*
-   * Removes unused files that are older than the provided timestamp
-   * @param $base Directory path
-   * @param $since Timestamp
-   */
-  protected function cleanup($base, $since) {
-    // cleanup anything older than X-minutes
-    $now = time();
+  protected function rmdir($base) {
     $dir = new DirectoryIterator($base);
     foreach ($dir as $info) {
       if ($info->isDot())
         continue;
-      $path = $base.'/'.$info->getFilename();
+      $path = $info->getPathname();
       if ($info->isDir()) {
-        $this->cleanup($path, $since);
-        rmdir($path);
-      } elseif ($now - $info->getMTime() > $since) {
-        unlink($path);
+        $this->rmdir($path, 0);
+        @rmdir($path);
+      } else {
+        @unlink($path);
       }
     }
+    @rmdir($base);
   }
 
   /*
@@ -110,20 +104,6 @@ class Build {
     unlink($temp);
   }
   
-  private function removeDirectory($path) {
-    $dir = new DirectoryIterator($path);
-    foreach ($dir as $info) {
-      if ($info->isDot())
-        continue;
-      $full = $info->getPathname();
-      if ($info->isDir())
-        if ($this->removeDirectory($full))
-          @rmdir($full);
-      if ($info->isFile())
-        @unlink($full);
-    }
-  }
-  
   /*
    * Exports the love project to Linux as an AppImage
    * @param $out Destination path
@@ -132,8 +112,9 @@ class Build {
   protected function exportLinux($out, $ops) {
     // extract zipped app image
     $squash = $out.'.squash/';
-    if (is_dir($squash))
-      $this->removeDirectory($squash);
+    if (is_dir($squash)) {
+      $this->rmdir($squash);
+    }
     mkdir($squash);
 /*
     $src = new ZipArchive;
@@ -200,7 +181,7 @@ class Build {
     //$out = $this->temp('img');
     exec($appimg.' '.$squash.' '.$out);
     //exec('rm '.$squash.' -r');
-    $this->rrmdir($squash);
+    $this->rmdir($squash);
   }
   
   /*
@@ -370,7 +351,21 @@ class Build {
       }
     }
     
-    $this->cleanup($this->cache, 15*60);
+    // cleanup anything older than X-minutes
+    $since = 15*60;
+    $now = time();
+    $dir = new DirectoryIterator($this->cache);
+    foreach ($dir as $info) {
+      if ($info->isDot())
+        continue;
+      $path = $info->getPathname();
+      if ($info->isDir()) {
+        $this->rmdir($path);
+      } elseif ($info->isFile()) {
+        if ($now - $info->getMTime() >= $since)
+          @unlink($path);
+      }
+    }
     
     return $file;
   }
