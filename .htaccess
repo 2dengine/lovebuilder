@@ -1,0 +1,6 @@
+<Files bin/*>
+  deny from all
+</Files>
+<Files tmp/*>
+  deny from all
+</Files>

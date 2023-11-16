@@ -89,11 +89,12 @@ class Build {
       $this->rmdir($squash);
     mkdir($squash);
 /*
+    // the following technique ruins our symlinks
     $zip = new ZipArchive;
     $zip->open($ops['bin'], ZipArchive::RDONLY);
-    $zip->extractTo($squash);
+    $zip->extractTo($squash);    
     $zip->close();
-    */
+*/
     $bin = $ops['bin'];
     exec("unzip $bin -d $squash");
 
@@ -106,9 +107,9 @@ class Build {
       $this->error('The project binaries cannot be processed', 503);
       return;
     }
+
     $old = file_get_contents($sqbin.'/love');
     unlink($sqbin.'/love');
-
     // fuse executable
     $src = fopen($ops['src'], 'r');
     $dest = fopen($sqbin.'/'.$proj, 'wb');
@@ -116,24 +117,31 @@ class Build {
     stream_copy_to_stream($src, $dest);
     fclose($src);
     fclose($dest);
-
+/*
+    $src = fopen($ops['src'], 'r');
+    $dest = fopen("$squash/$proj.love", 'web');
+    stream_copy_to_stream($src, $dest);
+    fclose($src);
+    fclose($dest);
+*/
     // make executable
     $dir = new DirectoryIterator($sqbin);
     foreach ($dir as $fileinfo)
       if (!$fileinfo->isDot())
         exec('chmod +x '.$sqbin.'/'.$fileinfo->getFilename());
-    exec('chmod +x '.$squash.'/AppRun');
+    exec("chmod +x $squash/AppRun");
 
-    if (!is_executable($sqbin.'/'.$proj)) {
+    if (!is_executable("$sqbin/$proj")) {
       $this->error('The project binaries cannot be processed', 503);
       return;
     }
-    
+
     // information
     $info = file_get_contents($squash.'/love.desktop');
     $info = preg_replace("/Name=[^\n]*?\n/", "Name=$proj\n", $info, 1);
     $info = preg_replace("/Exec=[^\n]*?\n/", "Exec=$proj %f\n", $info, 1);
-    file_put_contents($squash.'/love.desktop', $info);
+    //$info = preg_replace("/Exec=[^\n]*?\n/", "Exec=love $proj.love\n", $info, 1);
+    file_put_contents("$squash/love.desktop", $info);
 /*
     // icon
     if ($icon) {
@@ -150,10 +158,9 @@ class Build {
       }
     }
 */
-/*
-    exec('zip -r '.$out.' '.$squash);
-    $this->error('zip -r '.$out.' '.$squash.' '.filesize($out), 500);
-*/
+
+    //exec("cd $squash; zip -r $out .");
+
     $appimg = realpath($this->bin.'/appimagetool-x86_64.AppImage');
     if (!is_executable($appimg)) {
       $this->error('The project binaries cannot be processed', 503);
@@ -161,11 +168,10 @@ class Build {
     }
 
     // build
-    //$out = $this->temp('img');
     exec($appimg.' '.$squash.' '.$out);
 
     //exec('rm '.$squash.' -r');
-    $this->rmdir($squash);
+    //$this->rmdir($squash);
   }
   
   /*
@@ -313,8 +319,10 @@ class Build {
   
   function export($handle, $platform, $version = '11.4', $project = null) {
     $tmp = sys_get_temp_dir();
+    if (!is_dir($tmp))
+      mkdir($tmp);
     $src = tempnam($tmp, 'love');
-    $file = fopen($src, 'w');
+    $file = fopen($src, 'wb');
 
     $url = 'http://localhost/'.ltrim($handle, '/');
     $ch = curl_init($url);
