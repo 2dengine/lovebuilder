@@ -1,6 +1,6 @@
 # LÖVE builder
 Building LÖVE projects for multiple platforms is difficult and often requires switching between operating systems.
-This builder script can be installed on a server in order to make the job easier.
+This builder script can be installed on a web server in order to make the job easier.
 The LÖVE builder will fuse and package your .love project files for distribution across multiple platforms.
 
 ## Requirements
