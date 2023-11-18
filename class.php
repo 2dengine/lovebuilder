@@ -51,30 +51,63 @@ class Build {
    * @param $ops Options array
    */
   protected function exportWindows($out, $ops) {
-    // copy zipped binaries
-    if (!copy($ops['bin'], $out)) {
-      $this->error('The project binaries cannot be processed', 503);
-      return;
-    }
-    $zip = new ZipArchive;
-    $zip->open($out);
+    $squash = $out.'_tmp';
+    if (is_dir($squash))
+      $this->rmdir($squash);
+    mkdir($squash);
+    $bin = $ops['bin'];
+    exec("unzip $bin -d $squash");
     
     // fuse executable
-    $temp = tempnam(sys_get_temp_dir(), 'exe');
+    $project = $ops['project'];
+    rename("$squash/love.exe", "$squash/$project.exe");
     $src = fopen($ops['src'], 'r');
-    $dest = fopen($temp, 'wb');
-    $old = $zip->getFromName('love.exe');
-    fwrite($dest, $old);
+    $dest = fopen("$squash/$project.exe", 'ab');
     stream_copy_to_stream($src, $dest);
     fclose($src);
     fclose($dest);
 
-    $proj = $ops['project'];
-    $zip->deleteName('love.exe');
-    $zip->addFile($temp, $proj.'.exe');
-    // re-compress
-    $zip->close();
-    //unlink($temp);
+    // windows installer configuration
+    $bits = $ops['bits'];
+    $nsis = __DIR__.'/nsis';
+    $info = file_get_contents("$nsis/installer.nsi");
+    $array = [
+      'IDENTITY' => $project,
+      'TITLE' => $ops['title'],
+      'DESCRIPTION' => $ops['description'],
+      'PUBLISHER' => $ops['publisher'],
+      'URL' => $ops['url'],
+      'MAJOR' => $ops['major'],
+      'MINOR' => $ops['minor'],
+      'BUILD' => $ops['build'],
+      'PROGRAMS' => '$PROGRAMFILES'.$bits,
+    ];
+    foreach ($array as $k => $v) {
+      if (is_string($v))
+        $v = '"'.$v.'"';
+      $info = preg_replace("/!define $k [^\n]*?\n/", "!define $k $v\n", $info, 1);
+    }
+
+    file_put_contents("$squash/installer.nsi", $info);
+    //copy("$nsis/installer.nsi", "$squash/installer.nsi");
+    copy("$nsis/filesize.nsi", "$squash/filesize.nsi");
+    
+    // license agreement
+    copy("$nsis/readme.txt", "$squash/readme.txt");
+    // icon
+    copy("$nsis/logo.ico", "$squash/logo.ico");
+    if ($ops['icon']) {
+      $sizes = [ 16,20,24,30,32,36,40,48,60,64,72,80,96,256 ];
+      foreach ($sizes as $k => $v)
+        $sizes[$k] = [ $v, $v ];
+      require(__DIR__.'/icons.php' );
+      $lib = new \PHP_ICO($ops['icon'], $sizes);
+      $lib->save_ico("$squash/logo.ico");
+    }
+    
+    // build
+    exec("makensis $squash/installer.nsi");
+    copy("$squash/$project-install.exe", $out);
   }
   
   /*
@@ -84,7 +117,7 @@ class Build {
    */
   protected function exportLinux($out, $ops) {
     // extract zipped app image
-    $squash = $out.'.squash/';
+    $squash = $out.'_squash';
     if (is_dir($squash))
       $this->rmdir($squash);
     mkdir($squash);
@@ -98,79 +131,69 @@ class Build {
     $bin = $ops['bin'];
     exec("unzip $bin -d $squash");
 
-    // fuse
-    $version = $ops['version'];
-    $proj = $ops['project'];
-    $sqbin = ($version == '11.4') ? $squash.'/bin' : $squash.'/usr/bin';
+    // fuse executable
+    $sqbin = ($ops['version'] == '11.4') ? "$squash/bin" : "$squash/usr/bin";
     $sqbin = realpath($sqbin);
     if (!is_dir($sqbin)) {
       $this->error('The project binaries cannot be processed', 503);
       return;
     }
-
+    $project = $ops['project'];
     $old = file_get_contents($sqbin.'/love');
     unlink($sqbin.'/love');
-    // fuse executable
     $src = fopen($ops['src'], 'r');
-    $dest = fopen($sqbin.'/'.$proj, 'wb');
+    $dest = fopen($sqbin.'/'.$project, 'wb');
     fwrite($dest, $old);
     stream_copy_to_stream($src, $dest);
     fclose($src);
     fclose($dest);
-/*
-    $src = fopen($ops['src'], 'r');
-    $dest = fopen("$squash/$proj.love", 'web');
-    stream_copy_to_stream($src, $dest);
-    fclose($src);
-    fclose($dest);
-*/
+
     // make executable
     $dir = new DirectoryIterator($sqbin);
     foreach ($dir as $fileinfo)
       if (!$fileinfo->isDot())
         exec('chmod +x '.$sqbin.'/'.$fileinfo->getFilename());
     exec("chmod +x $squash/AppRun");
-
-    if (!is_executable("$sqbin/$proj")) {
+    if (!is_executable("$sqbin/$project")) {
       $this->error('The project binaries cannot be processed', 503);
       return;
     }
 
     // information
-    $info = file_get_contents($squash.'/love.desktop');
-    $info = preg_replace("/Name=[^\n]*?\n/", "Name=$proj\n", $info, 1);
-    $info = preg_replace("/Exec=[^\n]*?\n/", "Exec=$proj %f\n", $info, 1);
-    //$info = preg_replace("/Exec=[^\n]*?\n/", "Exec=love $proj.love\n", $info, 1);
-    file_put_contents("$squash/love.desktop", $info);
-/*
+    $info = file_get_contents("$squash/love.desktop");
+    unlink("$squash/love.desktop");
+    $array = [
+      'Exec' => $project,
+      'Name' => $ops['title'],
+      'Comment' => $ops['description'],
+      'Categories' => 'Game;',
+      'Icon' => $project,
+      'NoDisplay' => 'false',
+      'Terminal' => 'false',
+    ];
+    foreach ($array as $k => $v)
+      $info = preg_replace("/$k=[^\n]*?\n/", "$k=$v\n", $info, 1);
+    file_put_contents("$squash/$project.desktop", $info);
+
     // icon
+    rename("$squash/love.svg", "$squash/$project.svg");
+    $icon = $ops['icon'];
     if ($icon) {
-      $mime = mime_content_type($icon);
-      $res = file_get_contents($icon);
-      if ($mime == 'image/svg+xml' or $mime == 'image/svg') {
-        unlink($squash.'/love.svg');
-        file_put_contents($squash.'/love.svg', $res);
-      } elseif ($mime == 'image/png') {
-        unlink($squash.'/love.svg');
-        file_put_contents($squash.'/love.png', $res);
-      } else {
-        $this->error('Linux application icon must be in .PNG or .SVG format', 400);
-      }
+      unlink("$squash/logo.svg");
+      $data = file_get_contents($icon);
+      file_put_contents("$squash/.DirIcon", $data);
+      file_put_contents("$squash/$project.png", $data);
     }
-*/
 
-    //exec("cd $squash; zip -r $out .");
-
+    // build
     $appimg = realpath($this->bin.'/appimagetool-x86_64.AppImage');
     if (!is_executable($appimg)) {
       $this->error('The project binaries cannot be processed', 503);
       return;
     }
+    exec("$appimg $squash $out");
 
-    // build
-    exec($appimg.' '.$squash.' '.$out);
-
-    //exec('rm '.$squash.' -r');
+    //exec("rm $squash -r");
     //$this->rmdir($squash);
   }
   
@@ -230,30 +253,6 @@ class Build {
 
     $src->close();
   }
-  
-  /*
-   * Exports the love project to the web using Love.js
-   * @param $out Destination path
-   * @param $ops Options array
-   */
-  protected function exportWeb($out, $ops) {
-    // copy zipped binaries
-    if (!copy($ops['bin'], $out)) {
-      $this->error('The project binaries cannot be processed', 503);
-      return;
-    }
-    
-    $proj = $ops['project'];
-    //$cont = file_get_contents($ops['src']);
-    $src = new ZipArchive;
-    $src->open($out);
-    //$src->addFromString($proj.'.love', $cont);
-    $src->AddFile($ops['src'], $proj.'.love');
-    $player = $src->getFromName('player.js');
-    $player = str_replace('nogame.love', $proj.'.love', $player);
-    $src->addFromString('player.js', $player);
-    $src->close();
-  }
 
   /*
    * Exports a previously uploaded file based on a handle
@@ -282,6 +281,35 @@ class Build {
       $this->error('The project file does not contain main.lua or may be packaged incorrectly', 400);
       return false;
     }
+
+    // metadata from conf.lua
+    $conf = $zip->getFromName('conf.lua');
+    $title = $project;
+    if ($conf) {
+      preg_match('/.title\s*=\s*"([^"\n]+)"/', $conf, $matches);
+      if (!isset($matches[1]))
+        preg_match("/.title\s*=\s*'([^'\n]+)'/", $conf, $matches);
+      if (isset($matches[1]))
+        $title = $matches[1];
+    }
+
+    $icon = false;
+    $png = $zip->getFromName('logo.png');
+    if ($png) {
+      $tmp = sys_get_temp_dir();
+      $icon = tempnam($tmp, 'icon');
+      file_put_contents($icon, $png);
+      $size = getimagesize($icon);
+      if ($size['mime'] != 'image/png') {
+        $this->error('The application icon must be in .PNG format', 400);
+        return false;
+      }
+      if ($size[0] != 512 or $size[1] != 512) {
+        $this->error('The application icon must be 512x512 pixels', 400);
+        return false;
+      }
+    }
+    
     $zip->close();
 
     $bin = $this->bin."/love-$version-$platform.zip";
@@ -289,13 +317,22 @@ class Build {
       $this->error('The specified platform and version are unsupported:'.$bin, 400);
       return false;
     }
+
     $ops = array(
       'project' => $project,
+      'title' => $title,
+      'description' => 'Packaged by 2dengine.com',
+      'publisher' => '2dengine',
+      'url' => 'https://2dengine.com',
+      'major' => 1,
+      'minor' => 0,
+      'build' => 0,
       'platform' => $platform,
       'version' => $version,
       'src' => $src,
       'bin' => $bin,
       'bits' => ($platform == 'win32') ? 32 : 64,
+      'icon' => $icon,
     );
 
     if ($platform == 'win32' or $platform == 'win64')

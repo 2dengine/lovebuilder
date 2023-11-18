@@ -8,11 +8,24 @@ The builder script needs to be installed on a 64-bit Apache server running on a 
 The server must be running PHP 8.0 or later and depends on the ZipArchive class.
 The builder also uses AppImageTool which may require FUSE to run ("sudo apt install libfuse2").
 
+## Usage
+Make sure your .love file contains the following:
+
+/conf.lua - Make sure to set the title using: t.window.title = "My Game"
+/logo.png - Application icon in PNG format (512x512 px)
+/readme.txt - License agreement in plain text format
+
 ## Live Demo
 https://2dengine.com/builder
 
 ## Credits
-AppImageTool binary from
+AppImageTool
 https://github.com/AppImage/AppImageKit
+
+Nullsoft Scriptable Install System (NSIS)
+https://github.com/NSIS-Dev
+
+PHP-ICO
+https://github.com/chrisbliss18/php-ico/tree/master
 
 SmellyFishstiks, Deceze and others
