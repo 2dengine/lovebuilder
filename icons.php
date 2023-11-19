@@ -188,6 +188,7 @@ class PHP_ICO {
 
 				$alpha = ( $color & 0x7F000000 ) >> 24;
 				$alpha = ( 1 - ( $alpha / 127 ) ) * 255;
+				$alpha = floor($alpha);
 
 				$color &= 0xFFFFFF;
 				$color |= 0xFF000000 & ( $alpha << 24 );

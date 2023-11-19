@@ -45,6 +45,13 @@ class Build {
     @rmdir($base);
   }
   
+  protected function exec($cmd) {
+    $output = $error = null;
+    exec($cmd, $output, $error);
+    if ($error)
+      $this->error("The following command failed: $cmd", 503);
+  }
+  
   /*
    * Exports the love project to Microsoft Windows
    * @param $out Destination path
@@ -54,10 +61,10 @@ class Build {
     $squash = $out.'_tmp';
     if (is_dir($squash))
       $this->rmdir($squash);
-    mkdir($squash);
+    mkdir("$squash/");
     $bin = $ops['bin'];
-    exec("unzip $bin -d $squash");
-    
+    $this->exec("unzip $bin -d $squash/");
+
     // fuse executable
     $project = $ops['project'];
     rename("$squash/love.exe", "$squash/$project.exe");
@@ -106,8 +113,8 @@ class Build {
     }
     
     // build
-    exec("makensis $squash/installer.nsi");
-    copy("$squash/$project-install.exe", $out);
+    $this->exec("makensis $squash/installer.nsi");
+    rename("$squash/$project-install.exe", $out);
   }
   
   /*
@@ -120,29 +127,22 @@ class Build {
     $squash = $out.'_squash';
     if (is_dir($squash))
       $this->rmdir($squash);
-    mkdir($squash);
-/*
-    // the following technique ruins our symlinks
-    $zip = new ZipArchive;
-    $zip->open($ops['bin'], ZipArchive::RDONLY);
-    $zip->extractTo($squash);    
-    $zip->close();
-*/
+    mkdir("$squash/");
     $bin = $ops['bin'];
-    exec("unzip $bin -d $squash");
+    $this->exec("unzip $bin -d $squash/");
 
     // fuse executable
     $sqbin = ($ops['version'] == '11.4') ? "$squash/bin" : "$squash/usr/bin";
     $sqbin = realpath($sqbin);
     if (!is_dir($sqbin)) {
-      $this->error('The project binaries cannot be processed', 503);
+      $this->error('The project binaries were not found', 503);
       return;
     }
     $project = $ops['project'];
     $old = file_get_contents($sqbin.'/love');
-    unlink($sqbin.'/love');
+    unlink("$sqbin/love");
     $src = fopen($ops['src'], 'r');
-    $dest = fopen($sqbin.'/'.$project, 'wb');
+    $dest = fopen("$sqbin/$project", 'wb');
     fwrite($dest, $old);
     stream_copy_to_stream($src, $dest);
     fclose($src);
@@ -152,10 +152,10 @@ class Build {
     $dir = new DirectoryIterator($sqbin);
     foreach ($dir as $fileinfo)
       if (!$fileinfo->isDot())
-        exec('chmod +x '.$sqbin.'/'.$fileinfo->getFilename());
-    exec("chmod +x $squash/AppRun");
+        $this->exec('chmod +x '.$sqbin.'/'.$fileinfo->getFilename());
+    $this->exec("chmod +x $squash/AppRun");
     if (!is_executable("$sqbin/$project")) {
-      $this->error('The project binaries cannot be processed', 503);
+      $this->error('The project binaries cannot be fused', 503);
       return;
     }
 
@@ -179,7 +179,7 @@ class Build {
     rename("$squash/love.svg", "$squash/$project.svg");
     $icon = $ops['icon'];
     if ($icon) {
-      unlink("$squash/logo.svg");
+      unlink("$squash/$project.svg");
       $data = file_get_contents($icon);
       file_put_contents("$squash/.DirIcon", $data);
       file_put_contents("$squash/$project.png", $data);
@@ -187,14 +187,15 @@ class Build {
 
     // build
     $appimg = realpath($this->bin.'/appimagetool-x86_64.AppImage');
-    if (!is_executable($appimg)) {
+    if (!is_file($appimg) or !is_executable($appimg)) {
       $this->error('The project binaries cannot be processed', 503);
       return;
     }
-    exec("$appimg $squash $out");
 
-    //exec("rm $squash -r");
-    //$this->rmdir($squash);
+    $this->exec("$appimg $squash $out");
+
+    //$this->exec("rm $squash -r");
+    $this->rmdir($squash);
   }
   
   /*
@@ -356,32 +357,21 @@ class Build {
   
   function export($handle, $platform, $version = '11.4', $project = null) {
     $tmp = sys_get_temp_dir();
-    if (!is_dir($tmp))
-      mkdir($tmp);
+    //$tmp = __DIR__.'/tmp/';
+    //if (!is_dir($tmp))
+      //mkdir($tmp);
+      
     $src = tempnam($tmp, 'love');
     $file = fopen($src, 'wb');
-
     $url = 'http://localhost/'.ltrim($handle, '/');
     $ch = curl_init($url);
-    //curl_setopt($ch, CURLOPT_HEADER, true);
-    //curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     //curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
     curl_setopt($ch, CURLOPT_FILE, $file);
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
     curl_exec($ch);
-/*
-    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);    
-    if (curl_errno($ch) or $code != 200) {
-      $this->error(curl_error($ch), 400);
-      return false;
-    }
-    */
-    //$header = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-    //$body = substr($data, $header);
     curl_close($ch);
+    fclose($file);
     
-    //$data = file_get_contents($_SERVER['SERVER_NAME'].$handle);
-    //file_put_contents($src, $body);
     $dest = tempnam($tmp, 'bin');
     if (!$this->exportFile($src, $dest, $platform, $version, $project))
       return;
