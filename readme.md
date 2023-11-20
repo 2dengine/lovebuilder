@@ -5,8 +5,8 @@ The LÖVE builder will fuse and package your .love project files for distributio
 
 ## Requirements
 The builder script needs to be installed on a 64-bit Apache server running on a Linux file system.
-The server must be running PHP 8.0 or later and depends on the ZipArchive class.
-Building your LÖVE project requires several binary tools that need to be manually installed on your server ("fuse" and "makensis").
+The server must be running PHP 8.0 or later and depends on the ZipArchive class as well as the "zip" and "unzip" commands.
+Building your LÖVE project requires several additional binary tools that need to be manually installed on your server ("fuse" and "makensis").
 
 Make sure that you have set executive permissions (0755) for the file "bin/appimagetool-x86_64.AppImage".
 Please note that AppImageTool requires FUSE to run ("sudo apt-get install fuse").
@@ -17,9 +17,9 @@ For additional debugging information please try "sudo tail -100 /var/log/apache2
 ## Usage
 Make sure your .love file contains the following:
 
-/conf.lua - Do not forget to set the title using: t.window.title = "My Game"
+/conf.lua - The application title is defined using: t.window.title = "My Game"
 
-/logo.png - Application icon in PNG format (512x512 px)
+/logo.png - The application icon in PNG format (512x512 px)
 
 /readme.txt - License agreement in plain text format
 

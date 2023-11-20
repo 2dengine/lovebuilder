@@ -30,6 +30,8 @@ class Build {
    * @param $base Directory path
    */
   protected function rmdir($base) {
+    if (!is_dir($base))
+      return;
     $dir = new DirectoryIterator($base);
     foreach ($dir as $info) {
       if ($info->isDot())
@@ -52,29 +54,27 @@ class Build {
       $this->error("The following command failed: $cmd", 503);
   }
   
+  protected function append($a, $b) {
+    $src = fopen($a, 'r');
+    $dest = fopen($b, 'ab');
+    stream_copy_to_stream($src, $dest);
+    fclose($src);
+    fclose($dest);
+  }
+  
   /*
    * Exports the love project to Microsoft Windows
    * @param $out Destination path
    * @param $ops Options array
    */
   protected function exportWindows($out, $ops) {
-    $squash = $out.'_tmp';
-    if (is_dir($squash))
-      $this->rmdir($squash);
-    mkdir("$squash/");
-    $bin = $ops['bin'];
-    $this->exec("unzip $bin -d $squash/");
-
     // fuse executable
+    $tmp = $ops['tmp'];
     $project = $ops['project'];
-    rename("$squash/love.exe", "$squash/$project.exe");
-    $src = fopen($ops['src'], 'r');
-    $dest = fopen("$squash/$project.exe", 'ab');
-    stream_copy_to_stream($src, $dest);
-    fclose($src);
-    fclose($dest);
+    rename("$tmp/love.exe", "$tmp/$project.exe");
+    $this->append($ops['src'], "$tmp/$project.exe");
 
-    // windows installer configuration
+    // NSIS installer configuration
     $bits = $ops['bits'];
     $nsis = __DIR__.'/nsis';
     $info = file_get_contents("$nsis/installer.nsi");
@@ -91,30 +91,31 @@ class Build {
     ];
     foreach ($array as $k => $v) {
       if (is_string($v))
-        $v = '"'.$v.'"';
+        $v = '"'.str_replace('"', '$\\"', $v).'"';
       $info = preg_replace("/!define $k [^\n]*?\n/", "!define $k $v\n", $info, 1);
     }
 
-    file_put_contents("$squash/installer.nsi", $info);
-    //copy("$nsis/installer.nsi", "$squash/installer.nsi");
-    copy("$nsis/filesize.nsi", "$squash/filesize.nsi");
+    file_put_contents("$tmp/installer.nsi", $info);
+    copy("$nsis/filesize.nsi", "$tmp/filesize.nsi");
     
     // license agreement
-    copy("$nsis/readme.txt", "$squash/readme.txt");
+    copy("$nsis/readme.txt", "$tmp/readme.txt");
+
     // icon
-    copy("$nsis/logo.ico", "$squash/logo.ico");
-    if ($ops['icon']) {
+    copy("$nsis/logo.ico", "$tmp/logo.ico");
+    $icon = $ops['icon'];
+    if (is_file($icon)) {
       $sizes = [ 16,20,24,30,32,36,40,48,60,64,72,80,96,256 ];
       foreach ($sizes as $k => $v)
         $sizes[$k] = [ $v, $v ];
       require(__DIR__.'/icons.php' );
-      $lib = new \PHP_ICO($ops['icon'], $sizes);
-      $lib->save_ico("$squash/logo.ico");
+      $lib = new \PHP_ICO($icon, $sizes);
+      $lib->save_ico("$tmp/logo.ico");
     }
     
     // build
-    $this->exec("makensis $squash/installer.nsi");
-    rename("$squash/$project-install.exe", $out);
+    $this->exec("makensis $tmp/installer.nsi");
+    rename("$tmp/$project-install.exe", $out);
   }
   
   /*
@@ -123,45 +124,31 @@ class Build {
    * @param $ops Options array
    */
   protected function exportLinux($out, $ops) {
-    // extract zipped app image
-    $squash = $out.'_squash';
-    if (is_dir($squash))
-      $this->rmdir($squash);
-    mkdir("$squash/");
-    $bin = $ops['bin'];
-    $this->exec("unzip $bin -d $squash/");
-
     // fuse executable
-    $sqbin = ($ops['version'] == '11.4') ? "$squash/bin" : "$squash/usr/bin";
+    $tmp = $ops['tmp'];
+    $sqbin = ($ops['version'] == '11.4') ? "$tmp/bin" : "$tmp/usr/bin";
     $sqbin = realpath($sqbin);
     if (!is_dir($sqbin)) {
       $this->error('The project binaries were not found', 503);
       return;
     }
     $project = $ops['project'];
-    $old = file_get_contents($sqbin.'/love');
-    unlink("$sqbin/love");
-    $src = fopen($ops['src'], 'r');
-    $dest = fopen("$sqbin/$project", 'wb');
-    fwrite($dest, $old);
-    stream_copy_to_stream($src, $dest);
-    fclose($src);
-    fclose($dest);
-
-    // make executable
+    rename("$sqbin/love", "$sqbin/$project");
+    $this->append($ops['src'], "$sqbin/$project");
+    // permissions
     $dir = new DirectoryIterator($sqbin);
     foreach ($dir as $fileinfo)
       if (!$fileinfo->isDot())
         $this->exec('chmod +x '.$sqbin.'/'.$fileinfo->getFilename());
-    $this->exec("chmod +x $squash/AppRun");
+    $this->exec("chmod +x $tmp/AppRun");
     if (!is_executable("$sqbin/$project")) {
       $this->error('The project binaries cannot be fused', 503);
       return;
     }
 
-    // information
-    $info = file_get_contents("$squash/love.desktop");
-    unlink("$squash/love.desktop");
+    // .desktop file metadata
+    $info = file_get_contents("$tmp/love.desktop");
+    unlink("$tmp/love.desktop");
     $array = [
       'Exec' => $project,
       'Name' => $ops['title'],
@@ -171,31 +158,30 @@ class Build {
       'NoDisplay' => 'false',
       'Terminal' => 'false',
     ];
-    foreach ($array as $k => $v)
+    foreach ($array as $k => $v) {
+      if (is_string($v))
+        $v = str_replace(PHP_EOL, " ", $v);
       $info = preg_replace("/$k=[^\n]*?\n/", "$k=$v\n", $info, 1);
-    file_put_contents("$squash/$project.desktop", $info);
+    }
+    file_put_contents("$tmp/$project.desktop", $info);
 
-    // icon
-    rename("$squash/love.svg", "$squash/$project.svg");
+    // application icon
+    rename("$tmp/love.svg", "$tmp/$project.svg");
     $icon = $ops['icon'];
-    if ($icon) {
-      unlink("$squash/$project.svg");
+    if (is_file($icon)) {
+      unlink("$tmp/$project.svg");
       $data = file_get_contents($icon);
-      file_put_contents("$squash/.DirIcon", $data);
-      file_put_contents("$squash/$project.png", $data);
+      file_put_contents("$tmp/.DirIcon", $data);
+      file_put_contents("$tmp/$project.png", $data);
     }
 
     // build
     $appimg = realpath($this->bin.'/appimagetool-x86_64.AppImage');
-    if (!is_file($appimg) or !is_executable($appimg)) {
+    if (!is_executable($appimg)) {
       $this->error('The project binaries cannot be processed', 503);
       return;
     }
-
-    $this->exec("$appimg $squash $out");
-
-    //$this->exec("rm $squash -r");
-    $this->rmdir($squash);
+    $this->exec("$appimg $tmp $out");
   }
   
   /*
@@ -209,39 +195,35 @@ class Build {
       $this->error('The project binaries cannot be processed', 503);
       return;
     }
-
-    $version = $ops['version'];
-    $proj = $ops['project'];
-    //$cont = file_get_contents($ops['src']);
     
+    $project = $ops['project'];
     $src = new ZipArchive;
     $src->open($out);
     // love file
-    //$src->addFromString('love.app/Contents/Resources/'.$proj.'.love', $cont);
-    $src->addFile($ops['src'], 'love.app/Contents/Resources/'.$proj.'.love');
+    //$src->addFromString('love.app/Contents/Resources/'.$project.'.love', $cont);
+    $src->addFile($ops['src'], 'love.app/Contents/Resources/'.$project.'.love');
     // information
+    $array = [
+      'CFBundleName' => $project,
+      'CFBundleShortVersionString' => $ops['version'],
+      'NSHumanReadableCopyright' => 'Packaged by 2dengine.com',
+      //'UTExportedTypeDeclarations' => false,
+    ];
     $info = $src->getFromName('love.app/Contents/Info.plist');
-    $info = preg_replace('/<key>CFBundleName<\/key>[\s]*?<string>[\s\S]*?<\/string>/', "<key>CFBundleName</key>\n\t<string>$proj</string>", $info, 1);
-    $info = preg_replace('/<key>CFBundleShortVersionString<\/key>[\s]*?<string>[\s\S]*?<\/string>/', "<key>CFBundleShortVersionString</key>\n\t<string>$version</string>", $info, 1);
-    //$info = preg_replace('/<key>UTExportedTypeDeclarations<\/key>[\s]*?<array>[\s\S]*?<\/array>/', "", $info, 1);
-    //$src->deleteName('love.app/Contents/Info.plist');
-    $src->addFromString('love.app/Contents/Info.plist', $info);
-/*
-    // icon
-    if ($icon) {
-      //$iconext = strtolower($icon, PATHINFO_EXTENSION);
-      $mime = mime_content_type($icon);
-      $res = file_get_contents($icon);
-      if ($mime == 'image/x-icns') {
-        $src->addFromString('love.app/Contents/Resources/GameIcon.icns', $res);
-        $src->addFromString('love.app/Contents/Resources/OS X AppIcon.icns', $res);
-      } elseif ($mime == 'image/png') {
-        $src->addFromString('love.app/.Icon\r', $res);
-      } else {
-        $this->error('MacOS application icon must be in .ICNS or .PNG format', 400);
-      }
+    foreach ($array as $k => $v) {
+      if (is_string($v))
+        $v = htmlentities($v);
+      $info = preg_replace("/<key>$k<\/key>[\s]*?<string>[\s\S]*?<\/string>/", "<key>$k</key>\n\t<string>$v</string>", $info, 1);
     }
-*/
+    $src->addFromString('love.app/Contents/Info.plist', $info);
+    // icon
+    $icon = $ops['icon'];
+    if (is_file($icon)) {
+      $data = file_get_contents($icon);
+      $src->addFromString('love.app/.Icon\r', $data);
+      //$src->addFromString('love.app/Contents/Resources/GameIcon.icns', $data);
+      //$src->addFromString('love.app/Contents/Resources/OS X AppIcon.icns', $data);
+    }
     // rename the love.app directory
     // thanks to deceze from stackoverflow
     for ($i = 0; $i < $src->numFiles; $i++) { 
@@ -249,7 +231,7 @@ class Build {
       if (!$stat)
         continue;
       $fn = $stat['name'];
-      $src->renameName($fn, str_replace('love.app', $proj.'.app', $fn));
+      $src->renameName($fn, str_replace('love.app', "$project.app", $fn));
     }
 
     $src->close();
@@ -273,6 +255,8 @@ class Build {
       $this->error('The project filename is invalid or does not exist', 404);
       return false;
     }
+    
+    // project file
     $zip = new ZipArchive();
     if ($zip->open($src, ZipArchive::RDONLY) !== true) {
       $this->error('The project file does not appear to be a valid archive', 400);
@@ -282,7 +266,6 @@ class Build {
       $this->error('The project file does not contain main.lua or may be packaged incorrectly', 400);
       return false;
     }
-
     // metadata from conf.lua
     $conf = $zip->getFromName('conf.lua');
     $title = $project;
@@ -293,7 +276,7 @@ class Build {
       if (isset($matches[1]))
         $title = $matches[1];
     }
-
+    // icon
     $icon = false;
     $png = $zip->getFromName('logo.png');
     if ($png) {
@@ -310,14 +293,21 @@ class Build {
         return false;
       }
     }
+    $zip->close();    
     
-    $zip->close();
-
+    // binaries
     $bin = $this->bin."/love-$version-$platform.zip";
     if (!is_file($bin)) {
       $this->error('The specified platform and version are unsupported:'.$bin, 400);
       return false;
     }
+    $tmp = $dest.'_tmp';
+    if (is_dir($tmp))
+      $this->rmdir($tmp);
+    //mkdir("$tmp/");
+    // ZipArchive ruins our symlinks so we have to use "unzip"
+    //if ($platform != 'macos')
+      $this->exec("unzip $bin -d $tmp/");
 
     $ops = array(
       'project' => $project,
@@ -332,6 +322,7 @@ class Build {
       'version' => $version,
       'src' => $src,
       'bin' => $bin,
+      'tmp' => $tmp,
       'bits' => ($platform == 'win32') ? 32 : 64,
       'icon' => $icon,
     );
@@ -344,10 +335,9 @@ class Build {
       $this->exportMacOS($dest, $ops);
     elseif ($platform == 'web')
       $this->exportWeb($dest, $ops);
-    else {
-      $this->error('The specified platform is unsupported', 400);
-      return;
-    }
+    
+    $this->rmdir($tmp);
+    
     if (!is_file($dest) or !filesize($dest)) {
       $this->error('The project could not be exported to the specified location', 503);
       return false;
