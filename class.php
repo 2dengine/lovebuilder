@@ -90,8 +90,12 @@ class Build {
       'PROGRAMS' => '$PROGRAMFILES'.$bits,
     ];
     foreach ($array as $k => $v) {
-      if (is_string($v))
-        $v = '"'.str_replace('"', '$\\"', $v).'"';
+      if (is_string($v)) {
+        $v = str_replace('$', '$$', $v);
+        $v = str_replace('"', '$\\"', $v);
+        $v = '"'.$v.'"';
+      }
+     // ([^$"]|$\"|$$)*"
       $info = preg_replace("/!define $k [^\n]*?\n/", "!define $k $v\n", $info, 1);
     }
 
