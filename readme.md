@@ -23,6 +23,15 @@ Make sure your .love file contains the following:
 
 /readme.txt - License agreement in plain text format
 
+/meta.txt - Application metadata in .ini format:
+title=Awesome Game
+comment=Packaged by 2dengine.com
+publisher=2dengine LLC
+url=https://2dengine.com/
+major=1
+minor=0
+build=0
+
 ## Live Demo
 https://2dengine.com/builder
 

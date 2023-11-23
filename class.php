@@ -5,7 +5,7 @@ use ZipArchive;
 use ErrorException;
 use DirectoryIterator;
 
-class Build {
+class LoveBuild {
   protected $except;
   protected $bin;
 
@@ -63,11 +63,11 @@ class Build {
   }
   
   /*
-   * Exports the love project to Microsoft Windows
-   * @param $out Destination path
+   * Exports the love project to Microsoft Windows as an EXE installer
    * @param $ops Options array
    */
-  protected function exportWindows($out, $ops) {
+  protected function exportWindows($ops) {
+    $out = $ops['dest'];
     // fuse executable
     $tmp = $ops['tmp'];
     $project = $ops['project'];
@@ -75,21 +75,24 @@ class Build {
     $this->append($ops['src'], "$tmp/$project.exe");
 
     // NSIS installer configuration
-    $bits = $ops['bits'];
+    $bits = ($ops['platform'] == 'win32') ? 32 : 64;
     $nsis = __DIR__.'/nsis';
     $info = file_get_contents("$nsis/installer.nsi");
+    $meta = $ops['meta'];
     $array = [
       'IDENTITY' => $project,
-      'TITLE' => $ops['title'],
-      'DESCRIPTION' => $ops['description'],
-      'PUBLISHER' => $ops['publisher'],
-      'URL' => $ops['url'],
-      'MAJOR' => $ops['major'],
-      'MINOR' => $ops['minor'],
-      'BUILD' => $ops['build'],
+      'TITLE' => $meta['title'],
+      'DESCRIPTION' => $meta['comment'],
+      'PUBLISHER' => $meta['publisher'],
+      'URL' => $meta['url'],
+      'MAJOR' => $meta['major'],
+      'MINOR' => $meta['minor'],
+      'BUILD' => $meta['build'],
       'PROGRAMS' => '$PROGRAMFILES'.$bits,
     ];
     foreach ($array as $k => $v) {
+      if (is_null($v))
+        continue;
       if (is_string($v)) {
         $v = str_replace('$', '$$', $v);
         $v = str_replace('"', '$\\"', $v);
@@ -124,13 +127,13 @@ class Build {
   
   /*
    * Exports the love project to Linux as an AppImage
-   * @param $out Destination path
    * @param $ops Options array
    */
-  protected function exportLinux($out, $ops) {
+  protected function exportLinux($ops) {
+    $out = $ops['dest'];
     // fuse executable
     $tmp = $ops['tmp'];
-    $sqbin = ($ops['version'] == '11.4') ? "$tmp/bin" : "$tmp/usr/bin";
+    $sqbin = (is_dir("$tmp/bin")) ? "$tmp/bin" : "$tmp/usr/bin";
     $sqbin = realpath($sqbin);
     if (!is_dir($sqbin)) {
       $this->error('The project binaries were not found', 503);
@@ -153,16 +156,19 @@ class Build {
     // .desktop file metadata
     $info = file_get_contents("$tmp/love.desktop");
     unlink("$tmp/love.desktop");
+    $meta = $ops['meta'];
     $array = [
       'Exec' => $project,
-      'Name' => $ops['title'],
-      'Comment' => $ops['description'],
+      'Name' => $meta['title'],
+      'Comment' => $meta['comment'],
       'Categories' => 'Game;',
       'Icon' => $project,
       'NoDisplay' => 'false',
       'Terminal' => 'false',
     ];
     foreach ($array as $k => $v) {
+      if (is_null($v))
+        continue;
       if (is_string($v))
         $v = str_replace(PHP_EOL, " ", $v);
       $info = preg_replace("/$k=[^\n]*?\n/", "$k=$v\n", $info, 1);
@@ -190,10 +196,10 @@ class Build {
   
   /*
    * Exports the love project to MacOS
-   * @param $out Destination path
    * @param $ops Options array
    */
-  protected function exportMacOS($out, $ops) {
+  protected function exportMacOS($ops) {
+    $out = $ops['dest'];
     // copy zipped binaries
     if (!copy($ops['bin'], $out)) {
       $this->error('The project binaries cannot be processed', 503);
@@ -206,15 +212,18 @@ class Build {
     // love file
     //$src->addFromString('love.app/Contents/Resources/'.$project.'.love', $cont);
     $src->addFile($ops['src'], 'love.app/Contents/Resources/'.$project.'.love');
+    $meta = $ops['meta'];
     // information
     $array = [
       'CFBundleName' => $project,
-      'CFBundleShortVersionString' => $ops['version'],
-      'NSHumanReadableCopyright' => 'Packaged by 2dengine.com',
+      'CFBundleShortVersionString' => $meta['version'],
+      'NSHumanReadableCopyright' => $meta['comment'],
       //'UTExportedTypeDeclarations' => false,
     ];
     $info = $src->getFromName('love.app/Contents/Info.plist');
     foreach ($array as $k => $v) {
+      if (is_null($v))
+        continue;
       if (is_string($v))
         $v = htmlentities($v);
       $info = preg_replace("/<key>$k<\/key>[\s]*?<string>[\s\S]*?<\/string>/", "<key>$k</key>\n\t<string>$v</string>", $info, 1);
@@ -246,13 +255,15 @@ class Build {
    * @param $src Path to the .love file to be read
    * @param $dest Path to the resulting binary file to be written
    * @param $platform Target platform
-   * @param $version Love2D version
    * @param $project Project name, if different from the source filename
+   * @param $version Love2D version
    * @return True if successful
    */
-  protected function exportFile($src, $dest, $platform, $version = '11.4', $project = null) {
+  protected function exportFile($src, $dest, $platform, $project, $version) {
     if (!$project)
       $project = pathinfo($src, PATHINFO_FILENAME);
+    if (!$version)
+      $version = '11.4';
     $project = preg_replace('/[^a-zA-Z0-9_\.\-]/', '', $project);
     $version = preg_replace('/[^0-9\.]/', '', $version);
     if (!$src or !is_file($src)) {
@@ -270,16 +281,14 @@ class Build {
       $this->error('The project file does not contain main.lua or may be packaged incorrectly', 400);
       return false;
     }
-    // metadata from conf.lua
-    $conf = $zip->getFromName('conf.lua');
-    $title = $project;
-    if ($conf) {
-      preg_match('/.title\s*=\s*"([^"\n]+)"/', $conf, $matches);
-      if (!isset($matches[1]))
-        preg_match("/.title\s*=\s*'([^'\n]+)'/", $conf, $matches);
-      if (isset($matches[1]))
-        $title = $matches[1];
+    
+    // binaries
+    $bin = $this->bin."/love-$version-$platform.zip";
+    if (!is_file($bin)) {
+      $this->error('The specified platform and version are unsupported', 400);
+      return false;
     }
+
     // icon
     $icon = false;
     $png = $zip->getFromName('logo.png');
@@ -297,48 +306,52 @@ class Build {
         return false;
       }
     }
-    $zip->close();    
-    
-    // binaries
-    $bin = $this->bin."/love-$version-$platform.zip";
-    if (!is_file($bin)) {
-      $this->error('The specified platform and version are unsupported:'.$bin, 400);
-      return false;
-    }
-    $tmp = $dest.'_tmp';
-    if (is_dir($tmp))
-      $this->rmdir($tmp);
-    //mkdir("$tmp/");
-    // ZipArchive ruins our symlinks so we have to use "unzip"
-    //if ($platform != 'macos')
-      $this->exec("unzip $bin -d $tmp/");
 
-    $ops = array(
+    // metadata from meta.txt
+    $ops = [
       'project' => $project,
-      'title' => $title,
-      'description' => 'Packaged by 2dengine.com',
-      'publisher' => '2dengine',
-      'url' => 'https://2dengine.com',
-      'major' => 1,
-      'minor' => 0,
-      'build' => 0,
       'platform' => $platform,
-      'version' => $version,
       'src' => $src,
       'bin' => $bin,
-      'tmp' => $tmp,
-      'bits' => ($platform == 'win32') ? 32 : 64,
+      'dest' => $dest,
       'icon' => $icon,
-    );
+      'meta' => [
+        'title' => $project,
+        'publisher' => '2dengine.com',
+        'comment' => 'Packaged by 2dengine.com',
+        'major' => 1,
+        'minor' => 0,
+        'build' => date('Y.m.d'),
+      ]
+    ];
+    $ini = $zip->getFromName('meta.txt');
+    if ($ini) {
+      $data = parse_ini_string($ini);
+      foreach ($data as $k => $v)
+        $ops['meta'][$k] = $v;
+    }
+    $meta = $ops['meta'];
+    if (!isset($meta['version']))
+      $meta['version'] = $meta['major'].'.'.$meta['minor'].'.'.$meta['build'];
+    $zip->close(); 
+
+    $tmp = $ops['dest'].'_tmp';
+    $this->rmdir($tmp);
+    //mkdir("$tmp/");
+    // ZipArchive ruins our symlinks so we have to use "unzip"
+    if ($platform != 'macos') {
+      $ops['tmp'] = $tmp;
+      $this->exec("unzip $bin -d $tmp/");
+    }
 
     if ($platform == 'win32' or $platform == 'win64')
-      $this->exportWindows($dest, $ops);
+      $this->exportWindows($ops);
     elseif ($platform == 'linux')
-      $this->exportLinux($dest, $ops);
+      $this->exportLinux($ops);
     elseif ($platform == 'macos')
-      $this->exportMacOS($dest, $ops);
+      $this->exportMacOS($ops);
     elseif ($platform == 'web')
-      $this->exportWeb($dest, $ops);
+      $this->exportWeb($ops);
     
     $this->rmdir($tmp);
     
@@ -348,13 +361,18 @@ class Build {
     }
     return true;
   }
-  
-  function export($handle, $platform, $version = '11.4', $project = null) {
+
+  /*
+   * Exports a .love file from a local URI.
+   * @param $handle Unique resource identifier
+   * @param $platform Target platform
+   * @param $project Project name, if different from the source filename
+   * @param $version Love2D version
+   * @return Exported file contents
+   */
+  function export($handle, $platform, $project, $version) {
     $tmp = sys_get_temp_dir();
-    //$tmp = __DIR__.'/tmp/';
-    //if (!is_dir($tmp))
-      //mkdir($tmp);
-      
+
     $src = tempnam($tmp, 'love');
     $file = fopen($src, 'wb');
     $url = 'http://localhost/'.ltrim($handle, '/');
@@ -367,7 +385,7 @@ class Build {
     fclose($file);
     
     $dest = tempnam($tmp, 'bin');
-    if (!$this->exportFile($src, $dest, $platform, $version, $project))
+    if (!$this->exportFile($src, $dest, $platform, $project, $version))
       return;
     header('Content-Description: File Transfer');
     header('Content-Type: application/octet-stream');
