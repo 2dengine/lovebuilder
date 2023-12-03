@@ -12,14 +12,13 @@
 !define BUILD 0
 
 !define BINARY "${IDENTITY}.exe"
-!define PROGRAMS "$PROGRAMFILES"
 #!define INSTALLSIZE 1024
 
 !define REGPATH "Software\Microsoft\Windows\CurrentVersion\Uninstall\${TITLE}\"
  
 RequestExecutionLevel admin ;Require admin rights on NT6+ (When UAC is turned on)
  
-InstallDir "${PROGRAMS}\${TITLE}"
+InstallDir "$PROGRAMFILES\${TITLE}"
 
 LicenseData "readme.txt"
 Icon "logo.ico"

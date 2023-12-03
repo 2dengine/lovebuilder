@@ -88,25 +88,26 @@ class LoveBuild {
       'MAJOR' => $meta['major'],
       'MINOR' => $meta['minor'],
       'BUILD' => $meta['build'],
-      'PROGRAMS' => '$PROGRAMFILES'.$bits,
     ];
     foreach ($array as $k => $v) {
       if (is_null($v))
         continue;
       if (is_string($v)) {
+        // ([^$"]|$\"|$$)*"
         $v = str_replace('$', '$$', $v);
         $v = str_replace('"', '$\\"', $v);
         $v = '"'.$v.'"';
       }
-     // ([^$"]|$\"|$$)*"
       $info = preg_replace("/!define $k [^\n]*?\n/", "!define $k $v\n", $info, 1);
     }
+    $info = str_replace('$PROGRAMFILES', '$PROGRAMFILES'.$bits, $info);
 
     file_put_contents("$tmp/installer.nsi", $info);
     copy("$nsis/filesize.nsi", "$tmp/filesize.nsi");
     
     // license agreement
-    copy("$nsis/readme.txt", "$tmp/readme.txt");
+    if (!is_file("$tmp/readme.txt"))
+      copy("$nsis/readme.txt", "$tmp/readme.txt");
 
     // icon
     copy("$nsis/logo.ico", "$tmp/logo.ico");
@@ -199,19 +200,11 @@ class LoveBuild {
    * @param $ops Options array
    */
   protected function exportMacOS($ops) {
-    $out = $ops['dest'];
-    // copy zipped binaries
-    if (!copy($ops['bin'], $out)) {
-      $this->error('The project binaries cannot be processed', 503);
-      return;
-    }
-    
+    // fuse executable
+    $tmp = $ops['tmp'];
     $project = $ops['project'];
-    $src = new ZipArchive;
-    $src->open($out);
-    // love file
-    //$src->addFromString('love.app/Contents/Resources/'.$project.'.love', $cont);
-    $src->addFile($ops['src'], 'love.app/Contents/Resources/'.$project.'.love');
+    copy($ops['src'], "$tmp/love.app/Contents/Resources/$project.love");
+    
     $meta = $ops['meta'];
     // information
     $array = [
@@ -220,7 +213,7 @@ class LoveBuild {
       'NSHumanReadableCopyright' => $meta['comment'],
       //'UTExportedTypeDeclarations' => false,
     ];
-    $info = $src->getFromName('love.app/Contents/Info.plist');
+    $info = file_get_contents("$tmp/love.app/Contents/Info.plist");
     foreach ($array as $k => $v) {
       if (is_null($v))
         continue;
@@ -228,26 +221,22 @@ class LoveBuild {
         $v = htmlentities($v);
       $info = preg_replace("/<key>$k<\/key>[\s]*?<string>[\s\S]*?<\/string>/", "<key>$k</key>\n\t<string>$v</string>", $info, 1);
     }
-    $src->addFromString('love.app/Contents/Info.plist', $info);
+    file_put_contents("$tmp/love.app/Contents/Info.plist", $info);
+    
+    /*
     // icon
     $icon = $ops['icon'];
     if (is_file($icon)) {
       $data = file_get_contents($icon);
-      $src->addFromString('love.app/.Icon\r', $data);
-      //$src->addFromString('love.app/Contents/Resources/GameIcon.icns', $data);
-      //$src->addFromString('love.app/Contents/Resources/OS X AppIcon.icns', $data);
+      //file_put_contents("$tmp/love.app/.Icon\r", $data);
+      file_put_contents("$tmp/love.app/Contents/Resources/GameIcon.icns", $data);
+      file_put_contents("$tmp/love.app/Contents/Resources/OS X AppIcon.icns", $data);
     }
-    // rename the love.app directory
-    // thanks to deceze from stackoverflow
-    for ($i = 0; $i < $src->numFiles; $i++) { 
-      $stat = $src->statIndex($i);
-      if (!$stat)
-        continue;
-      $fn = $stat['name'];
-      $src->renameName($fn, str_replace('love.app', "$project.app", $fn));
-    }
-
-    $src->close();
+    */
+    rename("$tmp/love.app", "$tmp/$project.app");
+    
+    $out = $ops['dest'];    
+    $this->exec("genisoimage -V \"$project\" -D -R -apple -no-pad -o $out $tmp");
   }
 
   /*
@@ -321,7 +310,7 @@ class LoveBuild {
         'comment' => 'Packaged by 2dengine.com',
         'major' => 1,
         'minor' => 0,
-        'build' => date('Y.m.d'),
+        'build' => date('Ymd'),
       ]
     ];
     $ini = $zip->getFromName('meta.txt');
@@ -331,18 +320,21 @@ class LoveBuild {
         $ops['meta'][$k] = $v;
     }
     $meta = $ops['meta'];
-    if (!isset($meta['version']))
-      $meta['version'] = $meta['major'].'.'.$meta['minor'].'.'.$meta['build'];
+    if (!isset($meta['version']) or !$meta['version'])
+      $ops['meta']['version'] = $meta['major'].'.'.$meta['minor'].'.'.$meta['build'];
+    $readme = $zip->getFromName('readme.txt');
     $zip->close(); 
 
     $tmp = $ops['dest'].'_tmp';
     $this->rmdir($tmp);
     //mkdir("$tmp/");
     // ZipArchive ruins our symlinks so we have to use "unzip"
-    if ($platform != 'macos') {
+    //if ($platform != 'macos') {
       $ops['tmp'] = $tmp;
       $this->exec("unzip $bin -d $tmp/");
-    }
+    //}
+    if ($readme)
+      file_put_contents("$tmp/readme.txt", $readme);
 
     if ($platform == 'win32' or $platform == 'win64')
       $this->exportWindows($ops);
@@ -353,48 +345,12 @@ class LoveBuild {
     elseif ($platform == 'web')
       $this->exportWeb($ops);
     
-    $this->rmdir($tmp);
+    //$this->rmdir($tmp);
     
     if (!is_file($dest) or !filesize($dest)) {
       $this->error('The project could not be exported to the specified location', 503);
       return false;
     }
     return true;
-  }
-
-  /*
-   * Exports a .love file from a local URI.
-   * @param $handle Unique resource identifier
-   * @param $platform Target platform
-   * @param $project Project name, if different from the source filename
-   * @param $version Love2D version
-   * @return Exported file contents
-   */
-  function export($handle, $platform, $project, $version) {
-    $tmp = sys_get_temp_dir();
-
-    $src = tempnam($tmp, 'love');
-    $file = fopen($src, 'wb');
-    $url = 'http://localhost/'.ltrim($handle, '/');
-    $ch = curl_init($url);
-    //curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-    curl_setopt($ch, CURLOPT_FILE, $file);
-    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-    curl_exec($ch);
-    curl_close($ch);
-    fclose($file);
-    
-    $dest = tempnam($tmp, 'bin');
-    if (!$this->exportFile($src, $dest, $platform, $project, $version))
-      return;
-    header('Content-Description: File Transfer');
-    header('Content-Type: application/octet-stream');
-    header('Content-Disposition: attachment; filename="'.basename($dest).'"');
-    header('Content-Length: '.filesize($dest));
-    header('Pragma: public');
-    http_response_code(200);
-    
-    readfile($dest);
-    exit;
   }
 }
