@@ -48,10 +48,12 @@ class LoveBuild {
   }
   
   protected function exec($cmd) {
-    $output = $error = null;
-    exec($cmd, $output, $error);
-    if ($error)
-      $this->error("The following command failed: $cmd", 503);
+    $output = $code = null;
+    exec($cmd, $output, $code);
+    if ($code) {
+      $user = exec('whoami');
+      $this->error("The following command failed: sudo -u $user $cmd", 503);
+    }
   }
   
   protected function append($a, $b) {
@@ -131,35 +133,45 @@ class LoveBuild {
    * @param $ops Options array
    */
   protected function exportLinux($ops) {
-    $out = $ops['dest'];
-    // fuse executable
     $tmp = $ops['tmp'];
-    $sqbin = (is_dir("$tmp/bin")) ? "$tmp/bin" : "$tmp/usr/bin";
+    $out = $ops['dest'];
+    /*
+    // fuse executable
+    $appimg = $tmp.'/love-'.$ops['version'].'-x86_64.AppImage';
+    $this->exec("chmod +x $appimg");
+    $this->exec("cd $tmp && $appimg --appimage-extract");
+    $squash = "$tmp/squashfs-root";
+    */
+    $squash = $tmp;
+    $sqbin = (is_dir("$squash/bin")) ? "$squash/bin" : "$squash/usr/bin";
     $sqbin = realpath($sqbin);
     if (!is_dir($sqbin)) {
       $this->error('The project binaries were not found', 503);
       return;
     }
     $project = $ops['project'];
-    rename("$sqbin/love", "$sqbin/$project");
-    $this->append($ops['src'], "$sqbin/$project");
+    //rename("$sqbin/love", "$sqbin/$project");
+    //$this->append($ops['src'], "$sqbin/$project");
+    $this->append($ops['src'], "$sqbin/love");
     // permissions
     $dir = new DirectoryIterator($sqbin);
     foreach ($dir as $fileinfo)
       if (!$fileinfo->isDot())
         $this->exec('chmod +x '.$sqbin.'/'.$fileinfo->getFilename());
-    $this->exec("chmod +x $tmp/AppRun");
-    if (!is_executable("$sqbin/$project")) {
+    $this->exec("chmod +x $squash/AppRun");
+    //if (!is_executable("$sqbin/$project")) {
+    if (!is_executable("$sqbin/love")) {
       $this->error('The project binaries cannot be fused', 503);
       return;
     }
 
     // .desktop file metadata
-    $info = file_get_contents("$tmp/love.desktop");
-    unlink("$tmp/love.desktop");
+    $info = file_get_contents("$squash/love.desktop");
+    unlink("$squash/love.desktop");
     $meta = $ops['meta'];
     $array = [
-      'Exec' => $project,
+      //'Exec' => $project,
+      'Exec' => 'love',
       'Name' => $meta['title'],
       'Comment' => $meta['comment'],
       'Categories' => 'Game;',
@@ -174,25 +186,25 @@ class LoveBuild {
         $v = str_replace(PHP_EOL, " ", $v);
       $info = preg_replace("/$k=[^\n]*?\n/", "$k=$v\n", $info, 1);
     }
-    file_put_contents("$tmp/$project.desktop", $info);
+    file_put_contents("$squash/$project.desktop", $info);
 
     // application icon
-    rename("$tmp/love.svg", "$tmp/$project.svg");
+    rename("$squash/love.svg", "$squash/$project.svg");
     $icon = $ops['icon'];
     if (is_file($icon)) {
-      unlink("$tmp/$project.svg");
+      unlink("$squash/$project.svg");
       $data = file_get_contents($icon);
-      file_put_contents("$tmp/.DirIcon", $data);
-      file_put_contents("$tmp/$project.png", $data);
+      file_put_contents("$squash/.DirIcon", $data);
+      file_put_contents("$squash/$project.png", $data);
     }
 
     // build
-    $appimg = realpath($this->bin.'/appimagetool-x86_64.AppImage');
-    if (!is_executable($appimg)) {
+    $appimgtool = realpath($this->bin.'/appimagetool.AppImage');
+    if (!is_executable($appimgtool)) {
       $this->error('The project binaries cannot be processed', 503);
       return;
     }
-    $this->exec("$appimg $tmp $out");
+    $this->exec("$appimgtool $squash $out");
   }
   
   /*
@@ -240,6 +252,99 @@ class LoveBuild {
   }
 
   /*
+   * Exports the love project to Linux as an AppImage
+   * @param $ops Options array
+   */
+  protected function exportAndroid($ops) {
+    $tmp = $ops['tmp'];
+
+    $src = $ops['src'];
+    @mkdir("$tmp/assets/");
+    if ($ops['version'] == '11.5') {
+      //$this->exec("unzip -o $src -d $tmp/assets/");      
+      $zip = new ZipArchive();
+      $zip->open($src, ZipArchive::RDONLY);
+      $zip->extractTo("$tmp/assets/");
+      $zip->close();
+    } else {
+      copy($src, "$tmp/assets/game.love");
+    }
+    
+    $meta = $ops['meta'];
+    // the greatest value Google Play allows for versionCode is 2100000000
+    $code = substr($meta['major'].$meta['minor'].$meta['build'], 0, 9);
+    //$code = min($code, 2100000000);
+    
+    $package = preg_replace('/[^a-zA-Z0-9]/', '', $ops['project']);
+    $package = preg_replace('/^[0-9]+/', '', $package);
+    $package = 'com.dengine.'.$package;
+    // manifest file metadata
+    $manifest = file_get_contents("$tmp/AndroidManifest.xml");
+    $array = [
+      'package' => $package,
+      'platformBuildVersionCode' => $code,
+      'platformBuildVersionName' => $meta['version'],
+      'android:label' => $meta['title'],
+      'android:authorities' => "$package.androidx-startup",
+    ];
+    foreach ($array as $k => $v) {
+      if (is_null($v))
+        continue;
+      if (is_string($v))
+        $v = str_replace(PHP_EOL, " ", $v);
+      $v = str_replace('"', '$\\"', $v);
+      $manifest = preg_replace("/$k=\"[^\n]*?\"/", "$k=\"$v\"", $manifest);
+    }
+    file_put_contents("$tmp/AndroidManifest.xml", $manifest);
+    
+    $yml = file_get_contents("$tmp/apktool.yml");
+    $array = [
+      'apkFileName' => $ops['project'].'.apk',
+      //'targetSdkVersion' => 29,
+      'versionCode' => $code,
+      'versionName' => $meta['version'],
+    ];
+    foreach ($array as $k => $v) {
+      if (is_null($v))
+        continue;
+      if (is_string($v))
+        $v = str_replace(PHP_EOL, " ", $v);
+      $yml = preg_replace("/$k:[^\n]*?\n/", "$k: $v\n", $yml, 1);
+    }
+    file_put_contents("$tmp/apktool.yml", $yml);
+
+    // application icon
+    $icon = $ops['icon'];
+    if (is_file($icon)) {
+      $icons = [
+        'hdpi' => 72,
+        'mdpi' => 72,
+        'xhdpi' => 96,
+        'xxhdpi' => 96,
+        'xxxhdpi' => 192
+      ];
+      $src = imagecreatefrompng($icon);
+      list($width, $height) = getimagesize($icon);
+      foreach ($icons as $k => $size) {
+        $img = imagecreatetruecolor($size, $size);
+        imagealphablending($img, true);
+        imagecopyresampled($img, $src, 0, 0, 0, 0, $size, $size, $width, $height);
+        imagepng($img, "$tmp/res/drawable-$k/love.png");
+      }
+    }
+
+    // build
+    $apktool = realpath($this->bin.'/apktool');
+    if (!is_executable($apktool)) {
+      $this->error('The project binaries cannot be processed', 503);
+      return;
+    }
+    $out = $ops['dest'];
+    $frame = realpath($tmp.'/../');
+    $this->exec("$apktool b $tmp -o $out -p $frame");
+  }
+
+  /*
    * Exports a previously uploaded file based on a handle
    * @param $src Path to the .love file to be read
    * @param $dest Path to the resulting binary file to be written
@@ -252,8 +357,8 @@ class LoveBuild {
     if (!$project)
       $project = pathinfo($src, PATHINFO_FILENAME);
     if (!$version)
-      $version = '11.4';
-    $project = preg_replace('/[^a-zA-Z0-9_\.\-]/', '', $project);
+      $version = '11.5';
+    $identity = preg_replace('/[^a-zA-Z0-9_\.\-]/', '', $project);
     $version = preg_replace('/[^0-9\.]/', '', $version);
     if (!$src or !is_file($src)) {
       $this->error('The project filename is invalid or does not exist', 404);
@@ -298,8 +403,9 @@ class LoveBuild {
 
     // metadata from meta.txt
     $ops = [
-      'project' => $project,
+      'project' => strtolower($identity),
       'platform' => $platform,
+      'version' => $version,
       'src' => $src,
       'bin' => $bin,
       'dest' => $dest,
@@ -308,9 +414,10 @@ class LoveBuild {
         'title' => $project,
         'publisher' => '2dengine.com',
         'comment' => 'Packaged by 2dengine.com',
+        'url' => 'https://2dengine.com',
         'major' => 1,
         'minor' => 0,
-        'build' => date('Ymd'),
+        'build' => '0'.date('ymd'),
       ]
     ];
     $ini = $zip->getFromName('meta.txt');
@@ -320,6 +427,10 @@ class LoveBuild {
         $ops['meta'][$k] = $v;
     }
     $meta = $ops['meta'];
+    if ($meta['major'] > 9 or $meta['minor'] > 9) {
+      $this->error('The application version is out of range', 400);
+      return false;
+    }
     if (!isset($meta['version']) or !$meta['version'])
       $ops['meta']['version'] = $meta['major'].'.'.$meta['minor'].'.'.$meta['build'];
     $readme = $zip->getFromName('readme.txt');
@@ -331,21 +442,21 @@ class LoveBuild {
     // ZipArchive ruins our symlinks so we have to use "unzip"
     //if ($platform != 'macos') {
       $ops['tmp'] = $tmp;
-      $this->exec("unzip $bin -d $tmp/");
+      $this->exec("unzip -o $bin -d $tmp/");
     //}
     if ($readme)
       file_put_contents("$tmp/readme.txt", $readme);
 
-    if ($platform == 'win32' or $platform == 'win64')
+    if ($platform == 'android')
+      $this->exportAndroid($ops);
+    elseif ($platform == 'win32' or $platform == 'win64')
       $this->exportWindows($ops);
     elseif ($platform == 'linux')
       $this->exportLinux($ops);
     elseif ($platform == 'macos')
       $this->exportMacOS($ops);
-    elseif ($platform == 'web')
-      $this->exportWeb($ops);
     
-    //$this->rmdir($tmp);
+    $this->rmdir($tmp);
     
     if (!is_file($dest) or !filesize($dest)) {
       $this->error('The project could not be exported to the specified location', 503);

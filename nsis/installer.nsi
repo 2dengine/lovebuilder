@@ -100,4 +100,13 @@ Section "uninstall"
 	#RMDir /r /REBOOTOK "$SMPROGRAMS\${TITLE}"
 	Delete "$DESKTOP\${TITLE}.lnk"
 	DeleteRegKey HKLM "${REGPATH}"
+  
+  MessageBox MB_YESNO "Delete application save data?" IDYES true IDNO false
+  true:
+    Delete "$APPDATA\${TITLE}\*"
+    RMDir /r "$APPDATA\${TITLE}"
+    Goto next
+  false:
+  next:
+
 SectionEnd
