@@ -251,6 +251,51 @@ class LoveBuild {
     $this->exec("genisoimage -V \"$project\" -D -R -apple -no-pad -o $out $tmp");
   }
 
+  protected function exportMacOSZip($ops) {
+    $project = $ops['project'];
+    $out = $ops['dest'];    
+    
+    // copy zipped binaries
+    if (!copy($ops['bin'], $out)) {
+      $this->error('The project binaries cannot be processed', 503);
+      return;
+    }
+
+    $src = new ZipArchive;
+    $src->open($out);
+    // love file
+    //$src->addFromString('love.app/Contents/Resources/'.$project.'.love', $cont);
+    $src->addFile($ops['src'], 'love.app/Contents/Resources/'.$project.'.love');
+    $meta = $ops['meta'];
+    // information
+    $array = [
+      'CFBundleName' => $project,
+      'CFBundleShortVersionString' => $meta['version'],
+      'NSHumanReadableCopyright' => $meta['comment'],
+      //'UTExportedTypeDeclarations' => false,
+    ];
+    $info = $src->getFromName('love.app/Contents/Info.plist');
+    foreach ($array as $k => $v) {
+      if (is_null($v))
+        continue;
+      if (is_string($v))
+        $v = htmlentities($v);
+      $info = preg_replace("/<key>$k<\/key>[\s]*?<string>[\s\S]*?<\/string>/", "<key>$k</key>\n\t<string>$v</string>", $info, 1);
+    }
+    $src->addFromString('love.app/Contents/Info.plist', $info);
+
+    // rename the love.app directory
+    // thanks to deceze from stackoverflow
+    for ($i = 0; $i < $src->numFiles; $i++) { 
+      $stat = $src->statIndex($i);
+      if (!$stat)
+        continue;
+      $fn = $stat['name'];
+      $src->renameName($fn, str_replace('love.app', "$project.app", $fn));
+    }
+    $src->close();
+  }
+  
   /*
    * Exports the love project to Linux as an AppImage
    * @param $ops Options array
@@ -353,13 +398,17 @@ class LoveBuild {
    * @param $version Love2D version
    * @return True if successful
    */
-  protected function exportFile($src, $dest, $platform, $project, $version) {
+  function exportFile($src, $dest, $platform, $project, $version = '11.5') {
     if (!$project)
       $project = pathinfo($src, PATHINFO_FILENAME);
     if (!$version)
       $version = '11.5';
+
     $identity = preg_replace('/[^a-zA-Z0-9_\.\-]/', '', $project);
     $version = preg_replace('/[^0-9\.]/', '', $version);
+    $identity = strtolower($identity);
+    $platform = strtolower($platform);
+    
     if (!$src or !is_file($src)) {
       $this->error('The project filename is invalid or does not exist', 404);
       return false;
@@ -403,7 +452,7 @@ class LoveBuild {
 
     // metadata from meta.txt
     $ops = [
-      'project' => strtolower($identity),
+      'project' => $identity,
       'platform' => $platform,
       'version' => $version,
       'src' => $src,
@@ -455,6 +504,8 @@ class LoveBuild {
       $this->exportLinux($ops);
     elseif ($platform == 'macos')
       $this->exportMacOS($ops);
+    elseif ($platform == 'macoszip')
+      $this->exportMacOSZip($ops);
     
     $this->rmdir($tmp);
     
@@ -462,6 +513,15 @@ class LoveBuild {
       $this->error('The project could not be exported to the specified location', 503);
       return false;
     }
-    return true;
+
+    $ext = [
+      'android' => 'apk',
+      'win32' => 'exe',
+      'win64' => 'exe',
+      'linux' => 'AppImage',
+      'macos' => 'dmg',
+      'macoszip' => 'zip',
+    ];
+    return $identity.'.'.$ext[$platform];
   }
 }
